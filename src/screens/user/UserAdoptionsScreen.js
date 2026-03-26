@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, memo, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,9 +16,12 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Animated,
+  Easing,
+  AppState,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { WebView } from 'react-native-webview';
 import { COLORS, FONTS, SPACING, RADIUS } from '../../constants/theme';
 import { useAuth } from '../../context/AuthContext';
 import { adoptionService } from '../../services';
@@ -202,8 +205,74 @@ const DeliveryTimeline = memo(({ adoption }) => {
   );
 });
 
+const DeliveryStatusModal = memo(({ visible, onClose, adoption }) => {
+  if (!adoption) return null;
+
+  const statusConfig = getStatusConfig(adoption.status);
+  const petImageUrl = getPetImageUrl(adoption.pet_image);
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      transparent={true}
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={[styles.modalContainer, { maxHeight: '90%' }]}>
+          <View style={styles.modalHandle} />
+
+          <View style={styles.detailModalHeader}>
+            <Text style={styles.detailModalTitle}>Delivery Status</Text>
+            <TouchableOpacity onPress={onClose} style={styles.modalCloseBtn}>
+              <Ionicons name="close" size={22} color="#64748B" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+            <View style={styles.detailPetCard}>
+              <View style={styles.detailPetImageWrap}>
+                {petImageUrl ? (
+                  <Image source={{ uri: petImageUrl }} style={styles.detailPetImage} />
+                ) : (
+                  <View style={[styles.detailPetImage, styles.detailPetImagePlaceholder]}>
+                    <MaterialCommunityIcons name="dog" size={40} color="#CBD5E1" />
+                  </View>
+                )}
+                <LinearGradient
+                  colors={statusConfig.gradient}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.detailStatusBadge}
+                >
+                  <Ionicons name={statusConfig.icon} size={12} color="#FFF" />
+                  <Text style={styles.detailStatusText}>{statusConfig.label}</Text>
+                </LinearGradient>
+              </View>
+              <View style={styles.detailPetInfo}>
+                <Text style={styles.detailPetName}>{adoption.pet_name}</Text>
+                <View style={styles.detailPetMeta}>
+                  <Text style={styles.detailPetMetaText}>{adoption.species}</Text>
+                  <View style={styles.detailPetMetaDot} />
+                  <Text style={styles.detailPetMetaText}>{adoption.breed}</Text>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.deliveryModalTimelineWrap}>
+              <DeliveryTimeline adoption={adoption} />
+            </View>
+
+            <View style={{ height: 30 }} />
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+});
+
 // Payment & Delivery Modal Component
-const PaymentDeliveryModal = memo(({ visible, onClose, adoption, onSubmit }) => {
+const PaymentDeliveryModal = memo(({ visible, onClose, adoption, onSubmit, onPayMongoCheckout }) => {
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
@@ -211,6 +280,7 @@ const PaymentDeliveryModal = memo(({ visible, onClose, adoption, onSubmit }) => 
   const [postalCode, setPostalCode] = useState('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState('online'); // 'online' or 'cod'
 
   const adoptionFee = adoption?.adoption_fee || 500;
 
@@ -220,21 +290,34 @@ const PaymentDeliveryModal = memo(({ visible, onClose, adoption, onSubmit }) => 
       return;
     }
 
+    const deliveryDetails = {
+      fullName: fullName.trim(),
+      phone: phone.trim(),
+      address: address.trim(),
+      city: city.trim(),
+      postalCode: postalCode.trim(),
+      notes: notes.trim(),
+    };
+
     setLoading(true);
     try {
-      await onSubmit({
-        adoptionId: adoption.id,
-        deliveryDetails: {
-          fullName: fullName.trim(),
-          phone: phone.trim(),
-          address: address.trim(),
-          city: city.trim(),
-          postalCode: postalCode.trim(),
-          notes: notes.trim(),
-        },
-        paymentAmount: adoptionFee,
-      });
-      onClose();
+      if (paymentMethod === 'online') {
+        // PayMongo online payment flow
+        await onPayMongoCheckout({
+          adoptionId: adoption.id,
+          deliveryDetails,
+          paymentAmount: adoptionFee,
+        });
+      } else {
+        // Cash on Delivery flow
+        await onSubmit({
+          adoptionId: adoption.id,
+          deliveryDetails,
+          paymentAmount: adoptionFee,
+          paymentMethod: 'cod',
+        });
+        onClose();
+      }
     } catch (error) {
       Alert.alert('Error', error.message || 'Failed to process payment.');
     } finally {
@@ -399,7 +482,43 @@ const PaymentDeliveryModal = memo(({ visible, onClose, adoption, onSubmit }) => 
                 <Text style={styles.formSectionTitle}>Payment Method</Text>
               </View>
 
-              <TouchableOpacity style={styles.paymentOption} activeOpacity={0.8}>
+              {/* Online Payment Option */}
+              <TouchableOpacity 
+                style={[
+                  styles.paymentOption,
+                  paymentMethod === 'online' && styles.paymentOptionSelected,
+                ]} 
+                activeOpacity={0.8}
+                onPress={() => setPaymentMethod('online')}
+              >
+                <View style={styles.paymentOptionLeft}>
+                  <View style={[styles.paymentOptionIcon, { backgroundColor: '#EEF2FF' }]}>
+                    <Ionicons name="card" size={20} color="#6366F1" />
+                  </View>
+                  <View>
+                    <Text style={styles.paymentOptionTitle}>Pay Online</Text>
+                    <Text style={styles.paymentOptionDesc}>GCash, Card, GrabPay, Maya</Text>
+                  </View>
+                </View>
+                <View style={styles.paymentOptionCheck}>
+                  <Ionicons 
+                    name={paymentMethod === 'online' ? 'checkmark-circle' : 'ellipse-outline'} 
+                    size={22} 
+                    color={paymentMethod === 'online' ? COLORS.primary : '#CBD5E1'} 
+                  />
+                </View>
+              </TouchableOpacity>
+
+              {/* COD Option */}
+              <TouchableOpacity 
+                style={[
+                  styles.paymentOption,
+                  paymentMethod === 'cod' && styles.paymentOptionSelected,
+                  { marginTop: 10 },
+                ]} 
+                activeOpacity={0.8}
+                onPress={() => setPaymentMethod('cod')}
+              >
                 <View style={styles.paymentOptionLeft}>
                   <View style={styles.paymentOptionIcon}>
                     <Ionicons name="cash" size={20} color="#10B981" />
@@ -410,16 +529,31 @@ const PaymentDeliveryModal = memo(({ visible, onClose, adoption, onSubmit }) => 
                   </View>
                 </View>
                 <View style={styles.paymentOptionCheck}>
-                  <Ionicons name="checkmark-circle" size={22} color={COLORS.primary} />
+                  <Ionicons 
+                    name={paymentMethod === 'cod' ? 'checkmark-circle' : 'ellipse-outline'} 
+                    size={22} 
+                    color={paymentMethod === 'cod' ? COLORS.primary : '#CBD5E1'} 
+                  />
                 </View>
               </TouchableOpacity>
 
-              <View style={styles.paymentNote}>
-                <Ionicons name="shield-checkmark" size={16} color="#059669" />
-                <Text style={styles.paymentNoteText}>
-                  Safe & secure. Pay only when you receive your pet.
-                </Text>
-              </View>
+              {paymentMethod === 'online' && (
+                <View style={styles.paymentNote}>
+                  <Ionicons name="shield-checkmark" size={16} color="#6366F1" />
+                  <Text style={styles.paymentNoteText}>
+                    Secure payment via PayMongo. You'll be redirected to complete payment.
+                  </Text>
+                </View>
+              )}
+
+              {paymentMethod === 'cod' && (
+                <View style={styles.paymentNote}>
+                  <Ionicons name="shield-checkmark" size={16} color="#059669" />
+                  <Text style={styles.paymentNoteText}>
+                    Safe & secure. Pay only when you receive your pet.
+                  </Text>
+                </View>
+              )}
             </View>
           </ScrollView>
 
@@ -436,7 +570,7 @@ const PaymentDeliveryModal = memo(({ visible, onClose, adoption, onSubmit }) => 
               activeOpacity={0.9}
             >
               <LinearGradient
-                colors={loading ? ['#94A3B8', '#94A3B8'] : [COLORS.primary, '#7C3AED']}
+                colors={loading ? ['#94A3B8', '#94A3B8'] : paymentMethod === 'online' ? ['#6366F1', '#4F46E5'] : [COLORS.primary, '#7C3AED']}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={styles.confirmButtonGradient}
@@ -445,8 +579,10 @@ const PaymentDeliveryModal = memo(({ visible, onClose, adoption, onSubmit }) => 
                   <ActivityIndicator size="small" color="#FFF" />
                 ) : (
                   <>
-                    <Text style={styles.confirmButtonText}>Confirm Adoption</Text>
-                    <Ionicons name="arrow-forward" size={18} color="#FFF" />
+                    <Text style={styles.confirmButtonText}>
+                      {paymentMethod === 'online' ? 'Pay Now' : 'Confirm Adoption'}
+                    </Text>
+                    <Ionicons name={paymentMethod === 'online' ? 'card-outline' : 'arrow-forward'} size={18} color="#FFF" />
                   </>
                 )}
               </LinearGradient>
@@ -658,7 +794,7 @@ const ApplicationDetailsModal = memo(({ visible, onClose, adoption }) => {
 });
 
 // Separate component for adoption card to properly use useState for image error handling
-const AdoptionCard = memo(({ adoption, onCancel, onPayment, onViewDetails }) => {
+const AdoptionCard = memo(({ adoption, onCancel, onPayment, onViewDetails, onViewStatus, isPaymentSubmitted }) => {
   const [imageError, setImageError] = useState(false);
   const statusConfig = getStatusConfig(adoption.status);
   const canCancel = ['pending', 'reviewing'].includes(adoption.status?.toLowerCase());
@@ -669,7 +805,7 @@ const AdoptionCard = memo(({ adoption, onCancel, onPayment, onViewDetails }) => 
   
   return (
     <TouchableOpacity 
-      style={styles.adoptionCard} 
+      style={[styles.adoptionCard, { borderLeftWidth: 4, borderLeftColor: statusConfig.color }]} 
       activeOpacity={0.97}
       onPress={() => onViewDetails(adoption)}
     >
@@ -720,18 +856,6 @@ const AdoptionCard = memo(({ adoption, onCancel, onPayment, onViewDetails }) => 
         {/* Pet Info */}
         <View style={styles.petInfoContainer}>
           <Text style={styles.petName} numberOfLines={1}>{adoption.pet_name}</Text>
-          
-          <View style={styles.petAttributesRow}>
-            <View style={styles.petAttribute}>
-              <Ionicons name="paw" size={12} color="#6366F1" />
-              <Text style={styles.petAttributeText}>{adoption.species}</Text>
-            </View>
-            <View style={styles.attributeDivider} />
-            <View style={styles.petAttribute}>
-              <Feather name="tag" size={12} color="#EC4899" />
-              <Text style={styles.petAttributeText} numberOfLines={1}>{adoption.breed}</Text>
-            </View>
-          </View>
 
           {adoption.shelter_name && (
             <View style={styles.shelterInfo}>
@@ -782,33 +906,66 @@ const AdoptionCard = memo(({ adoption, onCancel, onPayment, onViewDetails }) => 
             <View style={styles.approvalContent}>
               <View style={styles.approvalMessage}>
                 <View style={styles.approvalIconWrap}>
-                  <Ionicons name="checkmark-circle" size={20} color="#059669" />
+                  <Ionicons name={isPaymentSubmitted ? 'shield-checkmark' : 'checkmark-circle'} size={20} color={isPaymentSubmitted ? '#6366F1' : '#059669'} />
                 </View>
                 <View style={styles.approvalTextWrap}>
-                  <Text style={styles.approvalTitle}>Application Approved!</Text>
-                  <Text style={styles.approvalSubtitle}>Complete payment to finalize adoption</Text>
+                  <Text style={styles.approvalTitle}>
+                    {isPaymentSubmitted ? 'Verifying Payment...' : 'Application Approved!'}
+                  </Text>
+                  <Text style={styles.approvalSubtitle}>
+                    {isPaymentSubmitted ? 'Please wait while we confirm your payment' : 'Complete payment to finalize adoption'}
+                  </Text>
                 </View>
               </View>
-              <TouchableOpacity
-                style={styles.proceedButton}
-                onPress={() => onPayment(adoption)}
-                activeOpacity={0.9}
-              >
-                <LinearGradient
-                  colors={['#059669', '#047857']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0 }}
-                  style={styles.proceedButtonGradient}
+              {isPaymentSubmitted ? (
+                <View style={styles.verifyingButton}>
+                  <LinearGradient
+                    colors={['#6366F1', '#4F46E5']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.proceedButtonGradient}
+                  >
+                    <ActivityIndicator size="small" color="#FFF" />
+                    <Text style={styles.proceedButtonText}>Verifying Payment</Text>
+                  </LinearGradient>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={styles.proceedButton}
+                  onPress={() => onPayment(adoption)}
+                  activeOpacity={0.9}
                 >
-                  <Text style={styles.proceedButtonText}>Proceed to Payment</Text>
-                  <View style={styles.proceedButtonIcon}>
-                    <Ionicons name="arrow-forward" size={16} color="#059669" />
-                  </View>
-                </LinearGradient>
-              </TouchableOpacity>
+                  <LinearGradient
+                    colors={['#059669', '#047857']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.proceedButtonGradient}
+                  >
+                    <Text style={styles.proceedButtonText}>Proceed to Payment</Text>
+                    <View style={styles.proceedButtonIcon}>
+                      <Ionicons name="arrow-forward" size={16} color="#059669" />
+                    </View>
+                  </LinearGradient>
+                </TouchableOpacity>
+              )}
             </View>
           ) : (
-            <DeliveryTimeline adoption={adoption} />
+            <View style={styles.deliveryCompactSection}>
+              <View style={styles.deliveryCompactTextWrap}>
+                <Text style={styles.deliveryCompactLabel}>Delivery Status</Text>
+                <Text style={styles.deliveryCompactValue}>
+                  {DELIVERY_STATUSES.find((s) => s.id === adoption.delivery_status)?.label || 'Processing'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.deliveryViewBtn}
+                onPress={() => onViewStatus(adoption)}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="eye-outline" size={15} color="#047857" />
+                <Text style={styles.deliveryViewBtnText}>View Status</Text>
+              </TouchableOpacity>
+            </View>
           )}
         </View>
       )}
@@ -816,7 +973,96 @@ const AdoptionCard = memo(({ adoption, onCancel, onPayment, onViewDetails }) => 
   );
 });
 
-const UserAdoptionsScreen = () => {
+// Payment Verification Overlay Component
+const PaymentVerificationOverlay = memo(({ visible, state, petName, onDismiss }) => {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(0.8)).current;
+  const spinAnim = useRef(new Animated.Value(0)).current;
+  const checkmarkScale = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      fadeAnim.setValue(0);
+      scaleAnim.setValue(0.8);
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
+        Animated.spring(scaleAnim, { toValue: 1, tension: 50, friction: 7, useNativeDriver: true }),
+      ]).start();
+      Animated.loop(
+        Animated.timing(spinAnim, { toValue: 1, duration: 1200, easing: Easing.linear, useNativeDriver: true })
+      ).start();
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (state === 'success') {
+      spinAnim.stopAnimation();
+      checkmarkScale.setValue(0);
+      Animated.spring(checkmarkScale, { toValue: 1, tension: 50, friction: 5, useNativeDriver: true }).start();
+    }
+  }, [state]);
+
+  if (!visible) return null;
+
+  const spin = spinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+
+  return (
+    <Modal visible={visible} transparent animationType="none">
+      <Animated.View style={[overlayStyles.container, { opacity: fadeAnim }]}>
+        <Animated.View style={[overlayStyles.card, { transform: [{ scale: scaleAnim }] }]}>
+          {state === 'verifying' && (
+            <>
+              <Animated.View style={[overlayStyles.spinnerWrap, { transform: [{ rotate: spin }] }]}>
+                <View style={overlayStyles.spinnerTrack} />
+              </Animated.View>
+              <Text style={overlayStyles.title}>Verifying Payment</Text>
+              <Text style={overlayStyles.subtitle}>
+                Please wait while we confirm your payment for {petName}...
+              </Text>
+            </>
+          )}
+          {state === 'success' && (
+            <>
+              <Animated.View style={[overlayStyles.successIcon, { transform: [{ scale: checkmarkScale }] }]}>
+                <LinearGradient colors={['#10B981', '#059669']} style={overlayStyles.successGradient}>
+                  <Ionicons name="checkmark" size={40} color="#FFF" />
+                </LinearGradient>
+              </Animated.View>
+              <Text style={overlayStyles.title}>Payment Confirmed! 🎉</Text>
+              <Text style={overlayStyles.subtitle}>
+                Your adoption for {petName} is confirmed.{"\n"}Your new furry friend will be on their way soon!
+              </Text>
+              <TouchableOpacity style={overlayStyles.dismissBtn} onPress={onDismiss} activeOpacity={0.8}>
+                <LinearGradient colors={['#10B981', '#059669']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={overlayStyles.dismissGradient}>
+                  <Text style={overlayStyles.dismissText}>Continue</Text>
+                  <Ionicons name="arrow-forward" size={16} color="#FFF" />
+                </LinearGradient>
+              </TouchableOpacity>
+            </>
+          )}
+          {state === 'processing' && (
+            <>
+              <View style={overlayStyles.processingIcon}>
+                <Ionicons name="time" size={40} color="#F59E0B" />
+              </View>
+              <Text style={overlayStyles.title}>Payment Processing</Text>
+              <Text style={overlayStyles.subtitle}>
+                Your payment is being verified. This usually takes a moment — we'll update your status shortly.
+              </Text>
+              <TouchableOpacity style={overlayStyles.dismissBtn} onPress={onDismiss} activeOpacity={0.8}>
+                <View style={overlayStyles.dismissOutline}>
+                  <Text style={[overlayStyles.dismissText, { color: '#64748B' }]}>Got It</Text>
+                </View>
+              </TouchableOpacity>
+            </>
+          )}
+        </Animated.View>
+      </Animated.View>
+    </Modal>
+  );
+});
+
+const UserAdoptionsScreen = ({ onNavigateToPets }) => {
   const { user } = useAuth();
   const [adoptions, setAdoptions] = useState([]);
   const [filteredAdoptions, setFilteredAdoptions] = useState([]);
@@ -832,10 +1078,64 @@ const UserAdoptionsScreen = () => {
   const [paymentModalVisible, setPaymentModalVisible] = useState(false);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [selectedAdoption, setSelectedAdoption] = useState(null);
+  const [deliveryStatusModalVisible, setDeliveryStatusModalVisible] = useState(false);
+  const [selectedDeliveryAdoption, setSelectedDeliveryAdoption] = useState(null);
+  const [checkoutUrl, setCheckoutUrl] = useState(null);
+  const [checkoutAdoptionId, setCheckoutAdoptionId] = useState(null);
+  const verifyingPaymentRef = useRef(false);
+  const [verifyingState, setVerifyingState] = useState(null);
+  const [verifyingPetName, setVerifyingPetName] = useState('');
+  const [submittedPaymentIds, setSubmittedPaymentIds] = useState([]);
 
   useEffect(() => {
     fetchAdoptions();
   }, []);
+
+  // Poll payment status while checkout is open to prevent WebView redirect issues
+  useEffect(() => {
+    let intervalId = null;
+    
+    if (checkoutAdoptionId && checkoutUrl) {
+      intervalId = setInterval(async () => {
+        if (verifyingPaymentRef.current) return;
+        
+        try {
+          // Silently check payment status
+          const verifyResponse = await adoptionService.verifyPayment(checkoutAdoptionId);
+          if (verifyResponse.success && verifyResponse.data?.status === 'paid') {
+            clearInterval(intervalId);
+            // Close webview and complete
+            verifyAndFinishPayment(checkoutAdoptionId, false);
+          }
+        } catch (e) {
+          // ignore background errors
+        }
+      }, 3000); // Check every 3 seconds
+    }
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [checkoutAdoptionId, checkoutUrl]);
+
+  // AppState listener to check payment when returning from a banking app
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', async (nextAppState) => {
+      if (nextAppState === 'active' && checkoutAdoptionId && checkoutUrl) {
+        if (verifyingPaymentRef.current) return;
+        try {
+          const verifyResponse = await adoptionService.verifyPayment(checkoutAdoptionId);
+          if (verifyResponse.success && verifyResponse.data?.status === 'paid') {
+            verifyAndFinishPayment(checkoutAdoptionId, false);
+          }
+        } catch (e) {}
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [checkoutAdoptionId, checkoutUrl]);
 
   useEffect(() => {
     filterAdoptions();
@@ -861,6 +1161,8 @@ const UserAdoptionsScreen = () => {
           review_notes: app.review_notes,
           adoption_fee: app.adoption_fee,
           payment_completed: app.payment_completed,
+          payment_method: app.payment_method,
+          paymongo_checkout_id: app.paymongo_checkout_id,
           delivery_status: app.delivery_status,
           delivery_full_name: app.delivery_full_name,
           delivery_phone: app.delivery_phone,
@@ -891,6 +1193,39 @@ const UserAdoptionsScreen = () => {
           additional_notes: app.additional_notes,
         }));
         setAdoptions(transformedAdoptions);
+
+        // Auto-verify any pending PayMongo payments (covers app restarts/refreshes)
+        const pendingPaymongo = transformedAdoptions.filter(
+          (app) =>
+            app.status?.toLowerCase() === 'approved' &&
+            !app.payment_completed &&
+            app.paymongo_checkout_id
+        );
+
+        if (pendingPaymongo.length > 0) {
+          // Show "Verifying" state on cards while we confirm
+          setSubmittedPaymentIds((prev) => {
+            const merged = new Set([...prev, ...pendingPaymongo.map((a) => a.id)]);
+            return Array.from(merged);
+          });
+
+          pendingPaymongo.forEach(async (app) => {
+            try {
+              const verifyResponse = await adoptionService.verifyPayment(app.id);
+              if (verifyResponse.success && verifyResponse.data?.status === 'paid') {
+                setAdoptions((prev) =>
+                  prev.map((a) =>
+                    a.id === app.id
+                      ? { ...a, payment_completed: true, delivery_status: 'processing' }
+                      : a
+                  )
+                );
+              }
+            } catch (e) {
+              // Silent background verification failure; user can retry from the card
+            }
+          });
+        }
       } else {
         setAdoptions([]);
       }
@@ -976,6 +1311,113 @@ const UserAdoptionsScreen = () => {
     }
   }, [fetchAdoptions]);
 
+  const handlePayMongoCheckout = useCallback(async (paymentData) => {
+    try {
+      const response = await adoptionService.createCheckoutSession(
+        paymentData.adoptionId,
+        paymentData.deliveryDetails,
+      );
+      if (response.success && response.data?.checkoutUrl) {
+        setCheckoutAdoptionId(paymentData.adoptionId);
+        setCheckoutUrl(response.data.checkoutUrl);
+        setPaymentModalVisible(false);
+      } else {
+        throw new Error('Failed to create checkout session');
+      }
+    } catch (error) {
+      throw error;
+    }
+  }, []);
+
+  // Centralized payment verification — overlay-based, with optimistic update
+  const verifyAndFinishPayment = useCallback(async (adoptionId, isCancelled = false) => {
+    if (verifyingPaymentRef.current) return;
+    if (!adoptionId) return;
+    verifyingPaymentRef.current = true;
+
+    const matchedAdoption = adoptions.find(a => a.id === adoptionId);
+    setVerifyingPetName(matchedAdoption?.pet_name || 'your pet');
+
+    // Close WebView immediately
+    setCheckoutUrl(null);
+    setCheckoutAdoptionId(null);
+    setSelectedAdoption(null);
+
+    if (isCancelled) {
+      Alert.alert('Payment Cancelled', 'You can try again anytime from your adoptions page.');
+      verifyingPaymentRef.current = false;
+      return;
+    }
+
+    // Mark this adoption as payment-submitted so the card shows "Verifying"
+    setSubmittedPaymentIds(prev => prev.includes(adoptionId) ? prev : [...prev, adoptionId]);
+
+    // Show verification overlay
+    setVerifyingState('verifying');
+
+    let paymentConfirmed = false;
+    try {
+      const verifyResponse = await adoptionService.verifyPayment(adoptionId);
+      if (verifyResponse.success && verifyResponse.data?.status === 'paid') {
+        paymentConfirmed = true;
+        setVerifyingState('success');
+      } else {
+        setVerifyingState('processing');
+      }
+    } catch (e) {
+      setVerifyingState('processing');
+    }
+
+    // Refresh real data from server
+    await fetchAdoptions();
+
+    // Re-apply optimistic update so "Proceed to Payment" button stays hidden
+    if (paymentConfirmed) {
+      setAdoptions(prev => prev.map(a =>
+        a.id === adoptionId ? { ...a, payment_completed: true } : a
+      ));
+    }
+
+    verifyingPaymentRef.current = false;
+  }, [fetchAdoptions, adoptions]);
+
+  const handleDismissVerification = useCallback(() => {
+    setVerifyingState(null);
+    setVerifyingPetName('');
+  }, []);
+
+  const handleWebViewMessage = useCallback(async (event) => {
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data.type === 'PAYMENT_SUCCESS') {
+        verifyAndFinishPayment(checkoutAdoptionId, false);
+      } else if (data.type === 'PAYMENT_CANCELLED') {
+        verifyAndFinishPayment(checkoutAdoptionId, true);
+      }
+    } catch (e) {
+      // Not a JSON message, ignore
+    }
+  }, [checkoutAdoptionId, verifyAndFinishPayment]);
+
+  // Detect success/cancel via URL navigation (fallback when postMessage doesn't fire)
+  const handleWebViewNavigation = useCallback((navState) => {
+    const url = navState.url || '';
+    if (url.includes('/api/payments/success') && checkoutAdoptionId && !verifyingPaymentRef.current) {
+      // Small delay so the page finishes loading before we close the WebView
+      setTimeout(() => {
+        verifyAndFinishPayment(checkoutAdoptionId, false);
+      }, 1000);
+    } else if (url.includes('/api/payments/cancel') && checkoutAdoptionId && !verifyingPaymentRef.current) {
+      verifyAndFinishPayment(checkoutAdoptionId, true);
+    }
+  }, [checkoutAdoptionId, verifyAndFinishPayment]);
+
+  // When user manually closes checkout WebView, always verify in case payment completed
+  const handleCloseCheckout = useCallback(async () => {
+    if (verifyingPaymentRef.current) return;
+    verifyAndFinishPayment(checkoutAdoptionId, false);
+  }, [checkoutAdoptionId, verifyAndFinishPayment]);
+
   const handleFilterChange = useCallback((filterId) => {
     setSelectedFilter(filterId);
   }, []);
@@ -983,6 +1425,11 @@ const UserAdoptionsScreen = () => {
   const handleViewDetails = useCallback((adoption) => {
     setSelectedAdoption(adoption);
     setDetailModalVisible(true);
+  }, []);
+
+  const handleViewDeliveryStatus = useCallback((adoption) => {
+    setSelectedDeliveryAdoption(adoption);
+    setDeliveryStatusModalVisible(true);
   }, []);
 
   // Render stat card
@@ -1058,7 +1505,11 @@ const UserAdoptionsScreen = () => {
           : `You don't have any ${selectedFilter} applications.`}
       </Text>
       {selectedFilter === 'all' && (
-        <TouchableOpacity style={styles.emptyButton} activeOpacity={0.9}>
+        <TouchableOpacity
+          style={styles.emptyButton}
+          activeOpacity={0.9}
+          onPress={() => onNavigateToPets && onNavigateToPets()}
+        >
           <LinearGradient
             colors={[COLORS.primary, '#7C3AED']}
             start={{ x: 0, y: 0 }}
@@ -1071,7 +1522,7 @@ const UserAdoptionsScreen = () => {
         </TouchableOpacity>
       )}
     </View>
-  ), [selectedFilter]);
+  ), [selectedFilter, onNavigateToPets]);
 
   return (
     <View style={styles.container}>
@@ -1152,6 +1603,8 @@ const UserAdoptionsScreen = () => {
                 onCancel={handleCancelApplication}
                 onPayment={handlePaymentDelivery}
                 onViewDetails={handleViewDetails}
+                onViewStatus={handleViewDeliveryStatus}
+                isPaymentSubmitted={submittedPaymentIds.includes(adoption.id)}
               />
             ))
           ) : (
@@ -1181,7 +1634,73 @@ const UserAdoptionsScreen = () => {
         }}
         adoption={selectedAdoption}
         onSubmit={handlePaymentSubmit}
+        onPayMongoCheckout={handlePayMongoCheckout}
       />
+
+      <DeliveryStatusModal
+        visible={deliveryStatusModalVisible}
+        onClose={() => {
+          setDeliveryStatusModalVisible(false);
+          setSelectedDeliveryAdoption(null);
+        }}
+        adoption={selectedDeliveryAdoption}
+      />
+
+      {/* Payment Verification Overlay */}
+      <PaymentVerificationOverlay
+        visible={verifyingState !== null}
+        state={verifyingState}
+        petName={verifyingPetName}
+        onDismiss={handleDismissVerification}
+      />
+
+      {/* PayMongo Checkout WebView Modal */}
+      <Modal
+        visible={!!checkoutUrl}
+        animationType="slide"
+        onRequestClose={handleCloseCheckout}
+      >
+        <View style={{ flex: 1, backgroundColor: '#FFF' }}>
+          <View style={styles.webViewHeader}>
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  'Close Payment?',
+                  'If you already completed the payment, we\'ll verify it. Otherwise you can try again later.',
+                  [
+                    { text: 'Continue Payment', style: 'cancel' },
+                    {
+                      text: 'Close',
+                      style: 'destructive',
+                      onPress: handleCloseCheckout,
+                    },
+                  ]
+                );
+              }}
+              style={styles.webViewCloseBtn}
+            >
+              <Ionicons name="close" size={24} color="#1E293B" />
+            </TouchableOpacity>
+            <Text style={styles.webViewTitle}>Complete Payment</Text>
+            <View style={{ width: 40 }} />
+          </View>
+          {checkoutUrl && (
+            <WebView
+              source={{ uri: checkoutUrl }}
+              style={{ flex: 1 }}
+              onMessage={handleWebViewMessage}
+              onNavigationStateChange={handleWebViewNavigation}
+              startInLoadingState={true}
+              renderLoading={() => (
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#FFF' }}>
+                  <ActivityIndicator size="large" color={COLORS.primary} />
+                  <Text style={{ marginTop: 12, color: '#64748B', fontSize: 14 }}>Loading payment page...</Text>
+                </View>
+              )}
+            />
+          )}
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -1389,6 +1908,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flex: 1,
+    minWidth: 0,
   },
   statusIndicator: {
     width: 8,
@@ -1404,7 +1925,9 @@ const styles = StyleSheet.create({
   cardHeaderRight: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'flex-end',
     gap: 12,
+    flexShrink: 0,
   },
   feeTag: {
     backgroundColor: '#ECFDF5',
@@ -1423,15 +1946,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
     color: '#94A3B8',
+    textAlign: 'right',
   },
   cardBody: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     padding: 16,
     gap: 14,
   },
   imageWrapper: {
     position: 'relative',
+    flexShrink: 0,
   },
   petImage: {
     width: 72,
@@ -1457,36 +1982,44 @@ const styles = StyleSheet.create({
   },
   petInfoContainer: {
     flex: 1,
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
+    minWidth: 0,
+    paddingTop: 2,
   },
   petName: {
     fontSize: 17,
     fontWeight: '700',
     color: '#0F172A',
-    marginBottom: 6,
+    marginBottom: 4,
     letterSpacing: -0.2,
   },
   petAttributesRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 7,
+    minWidth: 0,
+    flex: 1,
+    paddingRight: 4,
   },
   petAttribute: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
+    flexShrink: 1,
+    minWidth: 0,
   },
   petAttributeText: {
     fontSize: 12,
     color: '#64748B',
     fontWeight: '500',
+    flexShrink: 1,
   },
   attributeDivider: {
     width: 4,
     height: 4,
     borderRadius: 2,
     backgroundColor: '#CBD5E1',
-    marginHorizontal: 10,
+    marginHorizontal: 8,
   },
   shelterInfo: {
     flexDirection: 'row',
@@ -1503,6 +2036,9 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     gap: 8,
     alignItems: 'center',
+    flexShrink: 0,
+    alignSelf: 'flex-start',
+    marginLeft: 2,
   },
   detailsButton: {
     width: 40,
@@ -1599,6 +2135,11 @@ const styles = StyleSheet.create({
   proceedButton: {
     borderRadius: 10,
     overflow: 'hidden',
+  },
+  verifyingButton: {
+    borderRadius: 10,
+    overflow: 'hidden',
+    opacity: 0.9,
   },
   proceedButtonGradient: {
     flexDirection: 'row',
@@ -1824,6 +2365,70 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: 'rgba(255,255,255,0.85)',
     marginTop: 1,
+  },
+
+  deliveryCompactSection: {
+    marginTop: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#CFFAFE',
+    backgroundColor: '#ECFDF5',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
+  },
+  deliveryCompactTextWrap: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 10,
+  },
+  deliveryCompactLabel: {
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    marginBottom: 2,
+  },
+  deliveryCompactValue: {
+    fontSize: 16,
+    color: '#059669',
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  deliveryViewBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    borderRadius: 12,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  deliveryViewBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#047857',
+  },
+  deliveryModalTimelineWrap: {
+    backgroundColor: '#F0FDF4',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    marginBottom: 8,
   },
   
   // Empty State Styles
@@ -2060,12 +2665,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: COLORS.primary + '08',
+    backgroundColor: '#F8FAFC',
     borderWidth: 2,
-    borderColor: COLORS.primary,
+    borderColor: '#E2E8F0',
     borderRadius: 14,
     padding: 14,
-    marginBottom: 12,
+    marginBottom: 0,
+  },
+  paymentOptionSelected: {
+    backgroundColor: COLORS.primary + '08',
+    borderColor: COLORS.primary,
   },
   paymentOptionLeft: {
     flexDirection: 'row',
@@ -2373,6 +2982,128 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#334155',
     lineHeight: 22,
+  },
+
+  // WebView Checkout styles
+  webViewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: Platform.OS === 'ios' ? 60 : StatusBar.currentHeight + 12,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#FFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  webViewCloseBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F1F5F9',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  webViewTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+});
+
+// Overlay styles for PaymentVerificationOverlay
+const overlayStyles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
+  },
+  card: {
+    backgroundColor: '#FFF',
+    borderRadius: 24,
+    padding: 36,
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 340,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.15,
+    shadowRadius: 24,
+    elevation: 12,
+  },
+  spinnerWrap: {
+    width: 72,
+    height: 72,
+    marginBottom: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  spinnerTrack: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 4,
+    borderColor: '#E2E8F0',
+    borderTopColor: COLORS.primary,
+    borderRightColor: COLORS.primary,
+  },
+  successIcon: {
+    marginBottom: 24,
+  },
+  successGradient: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  processingIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#FEF3C7',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#64748B',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+  dismissBtn: {
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  dismissGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 36,
+    gap: 8,
+  },
+  dismissOutline: {
+    paddingVertical: 14,
+    paddingHorizontal: 36,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+  },
+  dismissText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFF',
   },
 });
 

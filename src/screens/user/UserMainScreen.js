@@ -12,7 +12,6 @@ import UserHomeScreen from './UserHomeScreen';
 import UserPetsScreen from './UserPetsScreen';
 import UserAdoptionsScreen from './UserAdoptionsScreen';
 import UserRescueScreen from './UserRescueScreen';
-import UserMissionScreen from './UserMissionScreen';
 import UserSettingsScreen from './UserSettingsScreen';
 import UserBottomTabBar from './UserBottomTabBar';
 import UserRescuerRegistrationScreen from './UserRescuerRegistrationScreen';
@@ -50,6 +49,7 @@ const UserMainScreen = ({ onLogout }) => {
   const [showJemoy, setShowJemoy] = useState(false);
   const [showShelterApplication, setShowShelterApplication] = useState(false);
   const [showShelterManager, setShowShelterManager] = useState(false);
+  const [notificationRefreshKey, setNotificationRefreshKey] = useState(0);
   const [isVerifiedRescuer, setIsVerifiedRescuer] = useState(false);
   const wasVerifiedRef = useRef(false); // Track if user was previously verified
   const previousUserIdRef = useRef(null); // Track previous user ID to detect user changes
@@ -85,6 +85,7 @@ const UserMainScreen = ({ onLogout }) => {
       setShowJemoy(false);
       setShowShelterApplication(false);
       setShowShelterManager(false);
+      setNotificationRefreshKey(0);
       setIsVerifiedRescuer(false);
       wasVerifiedRef.current = false;
     }
@@ -99,24 +100,20 @@ const UserMainScreen = ({ onLogout }) => {
   }, [user?.id, checkActiveMission]);
 
   // Enforce mission lock - redirect to mission screen if there's an active mission
-  // This runs on every render to ensure the user cannot escape
+  // This runs when mission state changes to avoid UI flicker on unrelated toggles.
   useEffect(() => {
     if (isMissionActive(activeMission)) {
-      // Force all navigation states to be reset when mission is active
-      if (!showRescueMission) {
-        setShowRescueMission(true);
-      }
-      // Close all other screens to ensure user is locked to mission
-      if (showRescuerDashboard) setShowRescuerDashboard(false);
-      if (showNotifications) setShowNotifications(false);
-      if (showReportRescue) setShowReportRescue(false);
-      if (showRescuerRegistration) setShowRescuerRegistration(false);
-      if (showRescueScreen) setShowRescueScreen(false);
-      if (showJemoy) setShowJemoy(false);
-      if (showShelterApplication) setShowShelterApplication(false);
-      if (showShelterManager) setShowShelterManager(false);
+      setShowRescueMission(true);
+      setShowRescuerDashboard(false);
+      setShowNotifications(false);
+      setShowReportRescue(false);
+      setShowRescuerRegistration(false);
+      setShowRescueScreen(false);
+      setShowJemoy(false);
+      setShowShelterApplication(false);
+      setShowShelterManager(false);
     }
-  }, [activeMission, showRescueMission, showRescuerDashboard, showNotifications, showReportRescue, showRescuerRegistration, showRescueScreen, showJemoy, showShelterApplication, showShelterManager]);
+  }, [activeMission]);
 
   // Function to check rescuer status
   const checkRescuerStatus = useCallback(async () => {
@@ -362,7 +359,12 @@ const UserMainScreen = ({ onLogout }) => {
   const handleGoBackFromNotifications = useCallback(() => {
     if (isMissionActive(activeMission)) return;
     setShowNotifications(false);
+    setNotificationRefreshKey(prev => prev + 1);
   }, [activeMission]);
+
+  const handleNotificationsUpdated = useCallback(() => {
+    setNotificationRefreshKey(prev => prev + 1);
+  }, []);
 
   const handleNavigateToReportRescue = useCallback(() => {
     if (isMissionActive(activeMission)) {
@@ -435,7 +437,20 @@ const UserMainScreen = ({ onLogout }) => {
   // Show notifications screen if active
   if (showNotifications) {
     return (
-      <UserNotificationsScreen onGoBack={handleGoBackFromNotifications} />
+      <UserNotificationsScreen
+        onGoBack={handleGoBackFromNotifications}
+        onNotificationsUpdated={handleNotificationsUpdated}
+        onNavigateToAdoptions={() => {
+          setShowNotifications(false);
+          setNotificationRefreshKey(prev => prev + 1);
+          setActiveTab('adoptions');
+        }}
+        onNavigateToRescues={() => {
+          setShowNotifications(false);
+          setNotificationRefreshKey(prev => prev + 1);
+          setActiveTab('rescue');
+        }}
+      />
     );
   }
 
@@ -488,15 +503,17 @@ const UserMainScreen = ({ onLogout }) => {
           <UserHomeScreen
             onNavigateToRescue={() => setActiveTab('rescue')}
             onNavigateToPets={() => setActiveTab('pets')}
+            onNavigateToAdoptions={() => setActiveTab('adoptions')}
             onNavigateToNotifications={handleNavigateToNotifications}
             onNavigateToReportRescue={handleNavigateToReportRescue}
             activeTab={activeTab}
+            notificationRefreshKey={notificationRefreshKey}
           />
         );
       case 'pets':
         return <UserPetsScreen />;
       case 'adoptions':
-        return <UserAdoptionsScreen />;
+        return <UserAdoptionsScreen onNavigateToPets={() => setActiveTab('pets')} />;
       case 'shelter':
         return (
           <UserShelterScreen />
@@ -524,12 +541,20 @@ const UserMainScreen = ({ onLogout }) => {
             onNavigateToReportRescue={handleNavigateToReportRescue}
           />
         );
-      case 'mission':
-        return <UserMissionScreen />;
       case 'settings':
-        return <UserSettingsScreen onLogout={onLogout} onNavigateToRescuerRegistration={handleNavigateToRescueFromSettings} onNavigateToJemoy={handleNavigateToJemoy} onNavigateToShelterApplication={handleNavigateToShelterApplication} onNavigateToShelterManager={handleNavigateToShelterManager} />;
+        return <UserSettingsScreen onLogout={onLogout} onNavigateToRescuerRegistration={handleNavigateToRescueFromSettings} onNavigateToJemoy={handleNavigateToJemoy} onNavigateToShelterApplication={handleNavigateToShelterApplication} onNavigateToShelterManager={handleNavigateToShelterManager} onNavigateToNotifications={handleNavigateToNotifications} onNavigateToAdoptions={() => handleTabChange('adoptions')} />;
       default:
-        return <UserHomeScreen />;
+        return (
+          <UserHomeScreen
+            onNavigateToRescue={() => setActiveTab('rescue')}
+            onNavigateToPets={() => setActiveTab('pets')}
+            onNavigateToAdoptions={() => setActiveTab('adoptions')}
+            onNavigateToNotifications={handleNavigateToNotifications}
+            onNavigateToReportRescue={handleNavigateToReportRescue}
+            activeTab={activeTab}
+            notificationRefreshKey={notificationRefreshKey}
+          />
+        );
     }
   };
 

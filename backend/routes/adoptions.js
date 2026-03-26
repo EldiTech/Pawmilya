@@ -3,6 +3,7 @@ const db = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { validate, schemas } = require('../middleware/validation');
 const { logger } = require('../config/logger');
+const { createPaymentTransaction } = require('../utils/paymentTransactions');
 
 const router = express.Router();
 
@@ -30,22 +31,26 @@ router.post('/', authenticateToken, validate(schemas.adoptionApplication), async
       additional_notes,
     } = req.body;
 
-    // Check if pet exists and is available
-    const petCheck = await db.query('SELECT status FROM pets WHERE id = $1', [pet_id]);
+    await db.query('BEGIN');
+
+    // Lock pet row to avoid race conditions between simultaneous applications.
+    const petCheck = await db.query('SELECT status FROM pets WHERE id = $1 FOR UPDATE', [pet_id]);
     if (petCheck.rows.length === 0) {
+      await db.query('ROLLBACK');
       return res.status(404).json({ error: 'Pet not found' });
     }
     if (petCheck.rows[0].status !== 'available') {
+      await db.query('ROLLBACK');
       return res.status(400).json({ error: 'Pet is not available for adoption' });
     }
 
-    // Check for existing application
     const existingApp = await db.query(
       `SELECT id FROM adoption_applications 
        WHERE pet_id = $1 AND user_id = $2 AND status NOT IN ('rejected', 'cancelled')`,
       [pet_id, req.user.id]
     );
     if (existingApp.rows.length > 0) {
+      await db.query('ROLLBACK');
       return res.status(409).json({ error: 'You already have an application for this pet' });
     }
 
@@ -67,14 +72,19 @@ router.post('/', authenticateToken, validate(schemas.adoptionApplication), async
       ]
     );
 
-    // Update pet status to pending
     await db.query('UPDATE pets SET status = $1 WHERE id = $2', ['pending', pet_id]);
+    await db.query('COMMIT');
 
     res.status(201).json({
       message: 'Adoption application submitted successfully',
       application: result.rows[0],
     });
   } catch (error) {
+    try {
+      await db.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('Adoption transaction rollback error:', rollbackError);
+    }
     console.error('Create application error:', error);
     res.status(500).json({ error: 'Failed to submit application' });
   }
@@ -84,8 +94,9 @@ router.post('/', authenticateToken, validate(schemas.adoptionApplication), async
 router.get('/my-applications', authenticateToken, async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT a.id, a.status, a.submitted_at, a.review_notes,
+            `SELECT a.id, a.status, a.submitted_at, a.review_notes,
               a.payment_completed, a.payment_amount, a.payment_date,
+              a.payment_method, a.paymongo_checkout_id,
               a.delivery_full_name, a.delivery_phone, a.delivery_address,
               a.delivery_city, a.delivery_postal_code, a.delivery_notes,
               a.delivery_status, a.delivery_scheduled_date, a.delivery_actual_date,
@@ -170,15 +181,15 @@ router.put('/:id/cancel', authenticateToken, async (req, res) => {
   }
 });
 
-// Submit payment and delivery details for approved adoption
+// Submit payment and delivery details for approved adoption (COD flow)
 router.post('/:id/payment', authenticateToken, async (req, res) => {
   try {
-    const { deliveryDetails, paymentAmount } = req.body;
+    const { deliveryDetails, paymentAmount, paymentMethod } = req.body;
     const applicationId = req.params.id;
 
     // Verify the application belongs to the user and is approved
     const appCheck = await db.query(
-      `SELECT a.id, a.status, a.pet_id, p.name as pet_name
+      `SELECT a.id, a.status, a.payment_completed, a.pet_id, p.name as pet_name, p.shelter_id
        FROM adoption_applications a
        JOIN pets p ON a.pet_id = p.id
        WHERE a.id = $1 AND a.user_id = $2`,
@@ -193,25 +204,31 @@ router.post('/:id/payment', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Application must be approved before payment' });
     }
 
+    if (appCheck.rows[0].payment_completed) {
+      return res.status(400).json({ error: 'Payment has already been completed' });
+    }
+
     // Update application with payment and delivery details, set initial delivery status
     const result = await db.query(
       `UPDATE adoption_applications 
        SET payment_completed = true,
            payment_amount = $1,
            payment_date = NOW(),
-           delivery_full_name = $2,
-           delivery_phone = $3,
-           delivery_address = $4,
-           delivery_city = $5,
-           delivery_postal_code = $6,
-           delivery_notes = $7,
+           payment_method = $2,
+           delivery_full_name = $3,
+           delivery_phone = $4,
+           delivery_address = $5,
+           delivery_city = $6,
+           delivery_postal_code = $7,
+           delivery_notes = $8,
            delivery_status = 'processing',
            delivery_updated_at = NOW(),
            updated_at = NOW()
-       WHERE id = $8
+       WHERE id = $9
        RETURNING id, status, payment_completed, delivery_status`,
       [
         paymentAmount,
+        paymentMethod || 'cod',
         deliveryDetails.fullName,
         deliveryDetails.phone,
         deliveryDetails.address,
@@ -224,6 +241,21 @@ router.post('/:id/payment', authenticateToken, async (req, res) => {
 
     // Update pet status to adopted
     await db.query('UPDATE pets SET status = $1 WHERE id = $2', ['adopted', appCheck.rows[0].pet_id]);
+
+    await createPaymentTransaction({
+      adoptionId: parseInt(applicationId, 10),
+      petId: appCheck.rows[0].pet_id,
+      customerUserId: req.user.id,
+      shelterId: appCheck.rows[0].shelter_id,
+      amount: paymentAmount,
+      paymentProvider: 'internal',
+      paymentMethod: paymentMethod || 'cod',
+      status: 'paid',
+      notes: 'COD/manual payment submitted by adopter',
+      metadata: {
+        flow: 'adoption_payment_submission',
+      },
+    });
 
     res.json({
       success: true,

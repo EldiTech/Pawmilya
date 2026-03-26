@@ -16,6 +16,7 @@ import {
   RefreshControl,
   BackHandler,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -126,6 +127,7 @@ const UserRescueMissionScreen = ({ activeMission, onMissionComplete, onRefresh }
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [completionPhoto, setCompletionPhoto] = useState(null);
+  const [completionPhotoUrlInput, setCompletionPhotoUrlInput] = useState('');
   const [completionNotes, setCompletionNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const webViewRef = React.useRef(null);
@@ -155,14 +157,20 @@ const UserRescueMissionScreen = ({ activeMission, onMissionComplete, onRefresh }
   }, [activeMission]);
 
   // Refresh mission data
+  const getAuthHeader = useCallback(async () => {
+    const token = await AsyncStorage.getItem(CONFIG.STORAGE_KEYS.AUTH_TOKEN);
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }, []);
+
   const refreshMission = useCallback(async () => {
     if (!mission?.id) return;
     
     try {
       setRefreshing(true);
+      const authHeader = await getAuthHeader();
       const response = await fetch(`${CONFIG.API_URL}/rescue-reports/${mission.id}`, {
         headers: {
-          'Authorization': `Bearer ${user?.token}`,
+          ...authHeader,
         },
       });
       
@@ -200,6 +208,7 @@ const UserRescueMissionScreen = ({ activeMission, onMissionComplete, onRefresh }
         if (processedData.completion_photo && processedData.status !== 'arrived') {
           // Photo was submitted and status changed, clear local state
           setCompletionPhoto(null);
+          setCompletionPhotoUrlInput('');
           setCompletionNotes('');
         }
         // If status is 'arrived', we don't touch completionPhoto at all - it stays as is
@@ -218,7 +227,7 @@ const UserRescueMissionScreen = ({ activeMission, onMissionComplete, onRefresh }
     } finally {
       setRefreshing(false);
     }
-  }, [mission?.id, user?.token, onMissionComplete]);
+  }, [mission?.id, onMissionComplete, getAuthHeader]);
 
   // Auto-refresh every 30 seconds when pending verification
   useEffect(() => {
@@ -268,7 +277,7 @@ const UserRescueMissionScreen = ({ activeMission, onMissionComplete, onRefresh }
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user?.token}`,
+          ...(await getAuthHeader()),
         },
         body: JSON.stringify({ status: newStatus }),
       });
@@ -331,6 +340,42 @@ const UserRescueMissionScreen = ({ activeMission, onMissionComplete, onRefresh }
     }
   }, []);
 
+  const addCompletionPhotoFromUrl = useCallback(() => {
+    const trimmedUrl = completionPhotoUrlInput.trim();
+
+    if (!trimmedUrl) {
+      Alert.alert('Validation Error', 'Please enter an image URL.');
+      return;
+    }
+
+    if (!/^https?:\/\//i.test(trimmedUrl)) {
+      Alert.alert('Invalid URL', 'Image URL must start with http:// or https://');
+      return;
+    }
+
+    setCompletionPhoto(trimmedUrl);
+    setCompletionPhotoUrlInput('');
+  }, [completionPhotoUrlInput]);
+
+  const getCompletionPhotoPayload = useCallback(async (photoValue) => {
+    if (!photoValue) return null;
+
+    if (photoValue.startsWith('data:image')) {
+      return photoValue;
+    }
+
+    if (photoValue.startsWith('http://') || photoValue.startsWith('https://')) {
+      return photoValue;
+    }
+
+    const base64 = await FileSystem.readAsStringAsync(photoValue, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    const extension = photoValue.split('.').pop()?.toLowerCase() || 'jpeg';
+    const mimeType = extension === 'png' ? 'image/png' : 'image/jpeg';
+    return `data:${mimeType};base64,${base64}`;
+  }, []);
+
   // Submit for verification
   const submitForVerification = async () => {
     if (!completionPhoto) {
@@ -349,22 +394,19 @@ const UserRescueMissionScreen = ({ activeMission, onMissionComplete, onRefresh }
             try {
               setSubmitting(true);
 
-              // Convert image to base64
-              const base64 = await FileSystem.readAsStringAsync(completionPhoto, {
-                encoding: FileSystem.EncodingType.Base64,
-              });
-              const extension = completionPhoto.split('.').pop()?.toLowerCase() || 'jpeg';
-              const mimeType = extension === 'png' ? 'image/png' : 'image/jpeg';
-              const base64Photo = `data:${mimeType};base64,${base64}`;
+              const photoPayload = await getCompletionPhotoPayload(completionPhoto);
+              if (!photoPayload) {
+                throw new Error('Missing completion photo payload');
+              }
 
               const photoResponse = await fetch(`${CONFIG.API_URL}/rescue-reports/${mission.id}/completion-photo`, {
                 method: 'POST',
                 headers: {
-                  'Authorization': `Bearer ${user?.token}`,
+                  ...(await getAuthHeader()),
                   'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                  photo: base64Photo,
+                  photo: photoPayload,
                   notes: '',
                 }),
               });
@@ -417,7 +459,7 @@ const UserRescueMissionScreen = ({ activeMission, onMissionComplete, onRefresh }
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user?.token}`,
+          ...(await getAuthHeader()),
         },
         body: JSON.stringify({
           reason: reason,
@@ -428,6 +470,7 @@ const UserRescueMissionScreen = ({ activeMission, onMissionComplete, onRefresh }
         // Clear local state immediately
         setMission(null);
         setCompletionPhoto(null);
+        setCompletionPhotoUrlInput('');
         setCompletionNotes('');
         
         Alert.alert(
@@ -830,6 +873,22 @@ const UserRescueMissionScreen = ({ activeMission, onMissionComplete, onRefresh }
                     <TouchableOpacity style={styles.photoOptionBtn} onPress={pickCompletionPhoto}>
                       <Ionicons name="images" size={32} color={COLORS.primary} />
                       <Text style={styles.photoOptionText}>Gallery</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+                {!completionPhoto && (
+                  <View style={styles.photoUrlRow}>
+                    <TextInput
+                      style={styles.photoUrlInput}
+                      placeholder="Paste image URL (https://...)"
+                      placeholderTextColor={COLORS.textMedium}
+                      value={completionPhotoUrlInput}
+                      onChangeText={setCompletionPhotoUrlInput}
+                      autoCapitalize="none"
+                      keyboardType="url"
+                    />
+                    <TouchableOpacity style={styles.addPhotoUrlBtn} onPress={addCompletionPhotoFromUrl}>
+                      <Ionicons name="link" size={20} color={COLORS.textWhite} />
                     </TouchableOpacity>
                   </View>
                 )}
@@ -1368,6 +1427,31 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
     marginTop: SPACING.sm,
     fontWeight: FONTS.weights.medium,
+  },
+  photoUrlRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: SPACING.md,
+  },
+  photoUrlInput: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.borderLight,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm + 2,
+    color: COLORS.textDark,
+    fontSize: FONTS.sizes.sm,
+    marginRight: SPACING.sm,
+  },
+  addPhotoUrlBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: RADIUS.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primary,
   },
   notesInput: {
     backgroundColor: COLORS.background,

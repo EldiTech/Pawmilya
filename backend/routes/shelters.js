@@ -84,24 +84,48 @@ router.get('/nearby', async (req, res) => {
       return res.status(400).json({ error: 'Latitude and longitude are required' });
     }
 
-    // Calculate distance using Haversine formula (approximate)
+    const lat = Number(latitude);
+    const lon = Number(longitude);
+    const radiusKm = Number(radius);
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(radiusKm) || radiusKm <= 0) {
+      return res.status(400).json({ error: 'Latitude, longitude, and radius must be valid numbers' });
+    }
+
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+      return res.status(400).json({ error: 'Latitude or longitude is out of range' });
+    }
+
+    // Calculate distance using a numerically safe Haversine variant.
     const result = await db.query(`
-      SELECT s.id, s.name, s.address, s.city, s.phone, s.latitude, s.longitude,
-             s.logo_url, s.logo_image, s.cover_image, s.cover_image_url, s.is_verified,
-             (SELECT image_data FROM shelter_images WHERE shelter_id = s.id AND image_type = 'logo' ORDER BY display_order LIMIT 1) as logo_image_data,
-             (6371 * acos(cos(radians($1)) * cos(radians(s.latitude)) * 
-              cos(radians(s.longitude) - radians($2)) + 
-              sin(radians($1)) * sin(radians(s.latitude)))) AS distance
-      FROM shelters s
-      WHERE s.is_active = TRUE 
-        AND s.latitude IS NOT NULL 
-        AND s.longitude IS NOT NULL
-      HAVING (6371 * acos(cos(radians($1)) * cos(radians(s.latitude)) * 
-              cos(radians(s.longitude) - radians($2)) + 
-              sin(radians($1)) * sin(radians(s.latitude)))) < $3
+      WITH shelters_with_distance AS (
+        SELECT s.id, s.name, s.address, s.city, s.phone, s.latitude, s.longitude,
+               s.logo_url, s.logo_image, s.cover_image, s.cover_image_url, s.is_verified,
+               (SELECT image_data FROM shelter_images WHERE shelter_id = s.id AND image_type = 'logo' ORDER BY display_order LIMIT 1) as logo_image_data,
+               (
+                 6371 * acos(
+                   LEAST(
+                     1,
+                     GREATEST(
+                       -1,
+                       cos(radians($1)) * cos(radians(s.latitude)) *
+                       cos(radians(s.longitude) - radians($2)) +
+                       sin(radians($1)) * sin(radians(s.latitude))
+                     )
+                   )
+                 )
+               ) AS distance
+        FROM shelters s
+        WHERE s.is_active = TRUE
+          AND s.latitude IS NOT NULL
+          AND s.longitude IS NOT NULL
+      )
+      SELECT *
+      FROM shelters_with_distance
+      WHERE distance < $3
       ORDER BY distance
       LIMIT 10
-    `, [latitude, longitude, radius]);
+    `, [lat, lon, radiusKm]);
 
     // Process shelters to include best available image
     const shelters = result.rows.map(shelter => {

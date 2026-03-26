@@ -546,6 +546,7 @@ const UserReportRescueScreen = ({ onGoBack }) => {
   
   // UI states
   const [selectedImages, setSelectedImages] = useState([]);
+  const [imageUrlInput, setImageUrlInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [showImagePickerModal, setShowImagePickerModal] = useState(false);
@@ -681,9 +682,29 @@ const UserReportRescueScreen = ({ onGoBack }) => {
   };
 
   // Image functions
+  const MAX_IMAGES = 5;
+  const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
+
+  const validateImageSize = async (uri) => {
+    try {
+      const info = await FileSystem.getInfoAsync(uri);
+      if (info.size && info.size > MAX_IMAGE_SIZE_BYTES) {
+        return false;
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  };
+
   const pickImageFromCamera = async () => {
     setShowImagePickerModal(false);
     
+    if (selectedImages.length >= MAX_IMAGES) {
+      Alert.alert('Limit Reached', `You can only add up to ${MAX_IMAGES} photos.`);
+      return;
+    }
+
     try {
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ['images'],
@@ -693,7 +714,13 @@ const UserReportRescueScreen = ({ onGoBack }) => {
       });
 
       if (!result.canceled && result.assets && result.assets[0]) {
-        setSelectedImages(prev => [...prev, result.assets[0]]);
+        const asset = result.assets[0];
+        const sizeOk = await validateImageSize(asset.uri);
+        if (!sizeOk) {
+          Alert.alert('Image Too Large', 'Each image must be under 5 MB.');
+          return;
+        }
+        setSelectedImages(prev => [...prev, asset]);
       }
     } catch (error) {
       Alert.alert('Error', 'Failed to take photo');
@@ -707,12 +734,20 @@ const UserReportRescueScreen = ({ onGoBack }) => {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsMultipleSelection: true,
-        selectionLimit: 5 - selectedImages.length,
+        selectionLimit: MAX_IMAGES - selectedImages.length,
         quality: 0.8,
       });
 
       if (!result.canceled && result.assets) {
-        setSelectedImages(prev => [...prev, ...result.assets].slice(0, 5));
+        const validAssets = [];
+        for (const asset of result.assets) {
+          const sizeOk = await validateImageSize(asset.uri);
+          if (sizeOk) validAssets.push(asset);
+        }
+        if (validAssets.length < result.assets.length) {
+          Alert.alert('Some Images Skipped', 'Images over 5 MB were excluded.');
+        }
+        setSelectedImages(prev => [...prev, ...validAssets].slice(0, MAX_IMAGES));
       }
     } catch (error) {
       Alert.alert('Error', 'Failed to select images');
@@ -731,8 +766,35 @@ const UserReportRescueScreen = ({ onGoBack }) => {
     setShowImagePickerModal(true);
   };
 
+  const addImageFromUrl = () => {
+    const trimmedUrl = imageUrlInput.trim();
+
+    if (!trimmedUrl) {
+      Alert.alert('Validation Error', 'Please enter an image URL.');
+      return;
+    }
+
+    if (!/^https?:\/\//i.test(trimmedUrl)) {
+      Alert.alert('Invalid URL', 'Image URL must start with http:// or https://');
+      return;
+    }
+
+    if (selectedImages.length >= MAX_IMAGES) {
+      Alert.alert('Limit Reached', `You can only add up to ${MAX_IMAGES} photos.`);
+      return;
+    }
+
+    setSelectedImages(prev => [...prev, { uri: trimmedUrl, source: 'url' }]);
+    setImageUrlInput('');
+    setShowImagePickerModal(false);
+  };
+
   const convertImageToBase64 = async (imageUri) => {
     try {
+      if (imageUri.startsWith('http://') || imageUri.startsWith('https://')) {
+        return imageUri;
+      }
+
       const base64 = await FileSystem.readAsStringAsync(imageUri, {
         encoding: FileSystem.EncodingType.Base64,
       });
@@ -1210,6 +1272,21 @@ const UserReportRescueScreen = ({ onGoBack }) => {
               </View>
               <Ionicons name="chevron-forward" size={24} color={COLORS.textMedium} />
             </TouchableOpacity>
+
+            <View style={styles.modalUrlRow}>
+              <TextInput
+                style={styles.modalUrlInput}
+                placeholder="Paste image URL (https://...)"
+                placeholderTextColor={COLORS.textMedium}
+                value={imageUrlInput}
+                onChangeText={setImageUrlInput}
+                autoCapitalize="none"
+                keyboardType="url"
+              />
+              <TouchableOpacity style={styles.modalUrlAddBtn} onPress={addImageFromUrl}>
+                <Ionicons name="link" size={20} color={COLORS.textWhite} />
+              </TouchableOpacity>
+            </View>
 
             <TouchableOpacity
               style={styles.modalCancelButton}
@@ -1761,6 +1838,30 @@ const styles = StyleSheet.create({
     fontSize: FONTS.sizes.sm,
     color: COLORS.textMedium,
     marginTop: 2,
+  },
+  modalUrlRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: SPACING.md,
+  },
+  modalUrlInput: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.borderLight,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm + 2,
+    color: COLORS.textDark,
+    marginRight: SPACING.sm,
+  },
+  modalUrlAddBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: RADIUS.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primary,
   },
   modalCancelButton: {
     marginTop: SPACING.lg,

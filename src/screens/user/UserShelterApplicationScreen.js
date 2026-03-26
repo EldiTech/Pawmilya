@@ -377,7 +377,7 @@ const UserShelterApplicationScreen = ({ onGoBack, onNavigateToManager }) => {
         setExistingApplication(null);
       }
     } catch (error) {
-      if (error?.status !== 403) {
+      if (error?.status !== 403 && error?.status !== 401) {
         console.error('Error checking shelter application:', error);
       }
       setExistingApplication(null);
@@ -479,6 +479,10 @@ const UserShelterApplicationScreen = ({ onGoBack, onNavigateToManager }) => {
         }
         if (!formData.phone.trim()) {
           Alert.alert('Error', 'Please enter a contact phone number');
+          return false;
+        }
+        if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+          Alert.alert('Error', 'Please enter a valid contact email address');
           return false;
         }
         return true;

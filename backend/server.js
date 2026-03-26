@@ -21,6 +21,8 @@ const rescuerApplicationRoutes = require('./routes/rescuerApplications');
 const shelterApplicationRoutes = require('./routes/shelterApplications');
 const shelterManagerRoutes = require('./routes/shelterManager');
 const healthRoutes = require('./routes/health');
+const aiRoutes = require('./routes/ai');
+const paymentRoutes = require('./routes/payments');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -71,6 +73,18 @@ const generalLimiter = rateLimit({
 });
 app.use('/api/', generalLimiter);
 
+// Higher rate limit for public read-heavy endpoints
+const publicReadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 2000, // Public GET endpoints can handle more traffic
+  message: { error: 'Too many requests, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api/pets', publicReadLimiter);
+app.use('/api/shelters', publicReadLimiter);
+app.use('/api/rescue-reports', publicReadLimiter);
+
 // Strict rate limiting for authentication endpoints
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -86,9 +100,17 @@ app.use('/api/auth/email-signin', authLimiter);
 app.use('/api/auth/send-signup-otp', authLimiter);
 app.use('/api/auth/resend-otp', authLimiter);
 
-// Body parsers
-app.use(express.json({ limit: '50mb' })); // Increase limit for base64 images
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// Body parsers - default 5mb limit for most routes
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
+
+// Larger body limit for routes that handle base64 image uploads
+const largeBodyParser = express.json({ limit: '20mb' });
+app.use('/api/users/avatar', largeBodyParser);
+app.use('/api/admin/pets', largeBodyParser);
+app.use('/api/rescue-reports', largeBodyParser);
+app.use('/api/shelter-manager/pets', largeBodyParser);
+app.use('/api/shelter-manager/my-shelter', largeBodyParser);
 
 // Images are now stored as base64 in database - no file uploads needed
 // Removed: app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -101,6 +123,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/pets', petRoutes);
 app.use('/api/adoptions', adoptionRoutes);
+app.use('/api/payments', paymentRoutes);
 app.use('/api/rescue-reports', rescueRoutes);
 app.use('/api/shelters', shelterRoutes);
 app.use('/api/shelter-transfers', shelterTransferRoutes);
@@ -108,6 +131,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/rescuer-applications', rescuerApplicationRoutes);
 app.use('/api/shelter-applications', shelterApplicationRoutes);
 app.use('/api/shelter-manager', shelterManagerRoutes);
+app.use('/api/ai', aiRoutes);
 
 // Create notification endpoint (admin only)
 const { authenticateAdmin: adminAuth } = require('./middleware/auth');
@@ -149,6 +173,7 @@ app.get('/', (req, res) => {
       shelterTransfers: '/api/shelter-transfers',
       admin: '/api/admin',
       rescuerApplications: '/api/rescuer-applications',
+      ai: '/api/ai',
     },
   });
 });

@@ -372,12 +372,14 @@ const UserPetsScreen = () => {
         }
         // Validate phone number format (Philippine format)
         const phoneRegex = /^(\+63|0)?[0-9]{10,11}$/;
-        if (!phoneRegex.test(adoptionForm.emergency_contact_phone.replace(/[\s-]/g, ''))) {
+        const cleanedEmergencyPhone = adoptionForm.emergency_contact_phone.replace(/[\s\-\(\)]/g, '');
+        if (!phoneRegex.test(cleanedEmergencyPhone)) {
           Alert.alert('Invalid Phone', 'Please enter a valid phone number (e.g., 09171234567 or +639171234567).');
           return false;
         }
         // Validate veterinarian phone if provided
-        if (adoptionForm.veterinarian_phone && !phoneRegex.test(adoptionForm.veterinarian_phone.replace(/[\s-]/g, ''))) {
+        const cleanedVetPhone = adoptionForm.veterinarian_phone.replace(/[\s\-\(\)]/g, '');
+        if (adoptionForm.veterinarian_phone && !phoneRegex.test(cleanedVetPhone)) {
           Alert.alert('Invalid Phone', 'Please enter a valid veterinarian phone number.');
           return false;
         }
@@ -406,7 +408,7 @@ const UserPetsScreen = () => {
     try {
       // Convert form data to proper types for backend validation
       // Clean phone numbers by removing spaces and dashes
-      const cleanPhone = (phone) => phone ? phone.replace(/[\s-]/g, '') : undefined;
+      const cleanPhone = (phone) => phone ? phone.replace(/[\s\-\(\)]/g, '') : undefined;
       
       const applicationData = {
         pet_id: selectedPet.id,

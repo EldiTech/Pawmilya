@@ -40,7 +40,7 @@ const calculatePasswordStrength = (password) => {
   return { score: 4, label: 'Very Strong', color: '#2E7D32' };
 };
 
-const SignUpScreen = ({ onNavigateToLogin, onSignUpSuccess }) => {
+const SignUpScreen = ({ onNavigateToLogin, onSignUpSuccess, onRequire2FA }) => {
   const { register } = useAuth();
   const [fullName, setFullName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -119,16 +119,24 @@ const SignUpScreen = ({ onNavigateToLogin, onSignUpSuccess }) => {
       });
 
       if (response.success) {
-        Alert.alert(
-          'Success!',
-          'Your account has been created successfully.',
-          [
-            {
-              text: 'OK',
-              onPress: () => onSignUpSuccess && onSignUpSuccess(),
-            },
-          ]
-        );
+        if (response.requires2FA) {
+          // Navigate to 2FA verification screen
+          onRequire2FA && onRequire2FA({
+            tempToken: response.tempToken,
+            maskedEmail: response.maskedEmail,
+          });
+        } else {
+          Alert.alert(
+            'Success!',
+            'Your account has been created successfully.',
+            [
+              {
+                text: 'OK',
+                onPress: () => onSignUpSuccess && onSignUpSuccess(),
+              },
+            ]
+          );
+        }
       } else {
         Alert.alert(
           'Registration Failed',

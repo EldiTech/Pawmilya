@@ -15,6 +15,7 @@ import {
   Modal,
   Dimensions,
   KeyboardAvoidingView,
+  Linking,
 } from 'react-native';
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -23,28 +24,11 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { WebView } from 'react-native-webview';
 import { COLORS, FONTS, SPACING, RADIUS } from '../../constants/theme';
 import { rescueService } from '../../services';
-import CONFIG from '../../config/config';
+import { normalizeImageUrl } from '../../utils/imageUrl';
 
 // Helper to get image URL - supports base64 and legacy file paths
 const getImageUrl = (imagePath) => {
-  if (!imagePath) return null;
-  // If it's a base64 data URL, use it directly
-  if (imagePath.startsWith('data:image')) {
-    return imagePath;
-  }
-  // If it's already a full URL, extract the path and rebuild with current base URL
-  if (imagePath.startsWith('http')) {
-    try {
-      const url = new URL(imagePath);
-      const path = url.pathname;
-      const baseUrl = CONFIG.API_URL.replace('/api', '');
-      return `${baseUrl}${path}`;
-    } catch {
-      return imagePath;
-    }
-  }
-  const baseUrl = CONFIG.API_URL.replace('/api', '');
-  return `${baseUrl}${imagePath}`;
+  return normalizeImageUrl(imagePath, null);
 };
 
 // Animal type options
@@ -919,7 +903,7 @@ const RescueCard = ({ request, onVolunteer, onView }) => {
   );
 };
 
-const RescueScreen = () => {
+const RescueScreen = ({ onNavigateToLogin }) => {
   const [activeTab, setActiveTab] = useState('requests');
   const [rescueRequests, setRescueRequests] = useState([]);
   const [stats, setStats] = useState({ active: 0, volunteers: 0, rescued: 0 });
@@ -1135,29 +1119,27 @@ const RescueScreen = () => {
   }, []);
 
   const handleVolunteer = async (reportId) => {
-    // Check if user is logged in (you can add actual authentication check here)
-    // For now, always show login prompt to ensure safety
-    Alert.alert(
-      'Login Required',
-      'Please log in first to ensure the safety and not false help. We need to verify your identity before you can volunteer for a rescue.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Go to Login',
-          onPress: () => {
-            // Navigate to login screen - implement navigation here
-          }
-        }
-      ]
-    );
-    
-    // Uncomment when authentication is implemented
-    // try {
-    //   await rescueService.volunteerForRescue(reportId);
-    //   Alert.alert('Thank You!', 'You have volunteered to help with this rescue.');
-    // } catch (error) {
-    //   Alert.alert('Error', 'Failed to volunteer. Please try again.');
-    // }
+    try {
+      await rescueService.volunteerForRescue(reportId);
+      Alert.alert('Thank You!', 'You have volunteered to help with this rescue.');
+    } catch (error) {
+      if (error?.status === 401 || error?.status === 403) {
+        Alert.alert(
+          'Login Required',
+          'Please log in first so we can verify your identity before you volunteer for a rescue.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Go to Login',
+              onPress: () => onNavigateToLogin && onNavigateToLogin(),
+            },
+          ]
+        );
+        return;
+      }
+
+      Alert.alert('Error', 'Failed to volunteer. Please try again.');
+    }
   };
 
   const handleViewReport = (report) => {
@@ -1186,6 +1168,24 @@ const RescueScreen = () => {
       return;
     }
 
+    if (!formData.reporter_name?.trim()) {
+      Alert.alert('Missing Information', 'Please enter your name so rescuers can contact you.');
+      return;
+    }
+
+    const cleanedReporterPhone = formData.reporter_phone?.replace(/[\s\-\(\)]/g, '') || '';
+    const phoneRegex = /^(09|\+639)\d{9}$/;
+    if (!phoneRegex.test(cleanedReporterPhone)) {
+      Alert.alert('Invalid Phone', 'Please enter a valid phone number (e.g., 09171234567 or +639171234567).');
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(formData.reporter_email || '')) {
+      Alert.alert('Invalid Email', 'Please enter a valid email address.');
+      return;
+    }
+
     try {
       setSubmitting(true);
       
@@ -1201,6 +1201,7 @@ const RescueScreen = () => {
       // Prepare the complete data to send
       const reportData = {
         ...formData,
+        reporter_phone: cleanedReporterPhone,
         images: base64Images.length > 0 ? base64Images : undefined,
       };
       
@@ -1237,22 +1238,48 @@ const RescueScreen = () => {
     }
   };
 
+  const MAX_IMAGES = 5;
+  const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
+
+  const validateImageSize = async (uri) => {
+    try {
+      const info = await FileSystem.getInfoAsync(uri);
+      if (info.size && info.size > MAX_IMAGE_SIZE_BYTES) {
+        return false;
+      }
+      return true;
+    } catch {
+      return true; // allow if we can't check
+    }
+  };
+
   const pickImageFromCamera = async () => {
     setShowImagePickerModal(false);
     
+    if (selectedImages.length >= MAX_IMAGES) {
+      Alert.alert('Limit Reached', `You can only add up to ${MAX_IMAGES} photos.`);
+      return;
+    }
+
     try {
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ['images'],
         allowsEditing: true,
         aspect: [4, 3],
-        quality: 0.5, // Reduced quality for smaller file size
+        quality: 0.5,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        const sizeOk = await validateImageSize(asset.uri);
+        if (!sizeOk) {
+          Alert.alert('Image Too Large', 'Each image must be under 5 MB.');
+          return;
+        }
         const newImage = {
-          uri: result.assets[0].uri,
-          type: result.assets[0].mimeType || 'image/jpeg',
-          fileName: result.assets[0].fileName || `photo_${Date.now()}.jpg`,
+          uri: asset.uri,
+          type: asset.mimeType || 'image/jpeg',
+          fileName: asset.fileName || `photo_${Date.now()}.jpg`,
         };
         setSelectedImages(prev => [...prev, newImage]);
       }
@@ -1269,22 +1296,25 @@ const RescueScreen = () => {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsMultipleSelection: true,
-        selectionLimit: 5 - selectedImages.length,
-        quality: 0.5, // Reduced quality for smaller file size
+        selectionLimit: MAX_IMAGES - selectedImages.length,
+        quality: 0.5,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        const newImages = result.assets.map(asset => ({
-          uri: asset.uri,
-          type: asset.mimeType || 'image/jpeg',
-          fileName: asset.fileName || `photo_${Date.now()}.jpg`,
-        }));
-        
-        setSelectedImages(prev => {
-          const combined = [...prev, ...newImages];
-          // Limit to 5 images
-          return combined.slice(0, 5);
-        });
+        const validAssets = [];
+        for (const asset of result.assets) {
+          const sizeOk = await validateImageSize(asset.uri);
+          if (!sizeOk) continue;
+          validAssets.push({
+            uri: asset.uri,
+            type: asset.mimeType || 'image/jpeg',
+            fileName: asset.fileName || `photo_${Date.now()}.jpg`,
+          });
+        }
+        if (validAssets.length < result.assets.length) {
+          Alert.alert('Some Images Skipped', 'Images over 5 MB were excluded.');
+        }
+        setSelectedImages(prev => [...prev, ...validAssets].slice(0, MAX_IMAGES));
       }
     } catch (error) {
       console.error('Error picking images:', error);
@@ -1336,7 +1366,10 @@ const RescueScreen = () => {
               <Text style={styles.emergencyNumber}>1-800-PET-HELP</Text>
             </View>
           </View>
-          <TouchableOpacity style={styles.callButton}>
+          <TouchableOpacity
+            style={styles.callButton}
+            onPress={() => Linking.openURL('tel:1800738435')}
+          >
             <Ionicons name="call" size={18} color={COLORS.textWhite} />
           </TouchableOpacity>
         </View>

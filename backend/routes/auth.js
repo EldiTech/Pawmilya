@@ -6,6 +6,7 @@ const db = require('../config/database');
 const { logger } = require('../config/logger');
 const { validate, schemas } = require('../middleware/validation');
 const tokenBlacklist = require('../config/tokenBlacklist');
+const { sendOtpEmail } = require('../config/email');
 
 const router = express.Router();
 
@@ -13,6 +14,129 @@ const router = express.Router();
 // REFRESH TOKEN STORAGE (In production, use Redis)
 // ===========================================
 const refreshTokens = new Map();
+
+// ===========================================
+// 2FA OTP STORAGE (Database-backed)
+// ===========================================
+const OTP_TTL_MS = 5 * 60 * 1000;
+
+const initOtpTable = async () => {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS otp_codes (
+        id SERIAL PRIMARY KEY,
+        temp_token VARCHAR(128) NOT NULL UNIQUE,
+        user_id INTEGER NOT NULL,
+        email VARCHAR(255) NOT NULL,
+        user_type VARCHAR(20) NOT NULL DEFAULT 'user',
+        otp VARCHAR(10) NOT NULL,
+        user_data JSONB,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_otp_codes_token ON otp_codes(temp_token);
+      CREATE INDEX IF NOT EXISTS idx_otp_codes_expiry ON otp_codes(expires_at);
+    `);
+  } catch (error) {
+    logger.error('Failed to initialize otp_codes table:', error.message);
+  }
+};
+
+initOtpTable();
+
+const generateOTP = () => {
+  return crypto.randomInt(100000, 999999).toString();
+};
+
+const maskEmail = (email) => {
+  const [local, domain] = email.split('@');
+  const maskedLocal = local.length <= 2
+    ? local[0] + '*'.repeat(local.length - 1)
+    : local[0] + '*'.repeat(local.length - 2) + local[local.length - 1];
+  return `${maskedLocal}@${domain}`;
+};
+
+const createOTPSession = async (userId, email, userType, userData) => {
+  const otp = generateOTP();
+  const tempToken = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+
+  await db.query(
+    `INSERT INTO otp_codes (temp_token, user_id, email, user_type, otp, user_data, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (temp_token) DO UPDATE
+     SET user_id = EXCLUDED.user_id,
+         email = EXCLUDED.email,
+         user_type = EXCLUDED.user_type,
+         otp = EXCLUDED.otp,
+         user_data = EXCLUDED.user_data,
+         attempts = 0,
+         created_at = CURRENT_TIMESTAMP,
+         expires_at = EXCLUDED.expires_at`,
+    [tempToken, userId, email, userType, otp, JSON.stringify(userData || {}), expiresAt]
+  );
+
+  // Best-effort cleanup of expired rows.
+  await db.query('DELETE FROM otp_codes WHERE expires_at < NOW()');
+
+  return { otp, tempToken };
+};
+
+const getOTPSession = async (tempToken) => {
+  const result = await db.query(
+    `SELECT temp_token, user_id, email, user_type, otp, user_data, attempts, created_at, expires_at
+     FROM otp_codes
+     WHERE temp_token = $1`,
+    [tempToken]
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  const row = result.rows[0];
+  return {
+    tempToken: row.temp_token,
+    userId: row.user_id,
+    email: row.email,
+    userType: row.user_type,
+    otp: row.otp,
+    userData: row.user_data || {},
+    attempts: row.attempts,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+  };
+};
+
+const incrementOtpAttempts = async (tempToken) => {
+  const result = await db.query(
+    `UPDATE otp_codes
+     SET attempts = attempts + 1
+     WHERE temp_token = $1
+     RETURNING attempts`,
+    [tempToken]
+  );
+  return result.rows[0]?.attempts ?? 0;
+};
+
+const updateOtpCode = async (tempToken, otp) => {
+  const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+  await db.query(
+    `UPDATE otp_codes
+     SET otp = $1,
+         attempts = 0,
+         expires_at = $2,
+         created_at = CURRENT_TIMESTAMP
+     WHERE temp_token = $3`,
+    [otp, expiresAt, tempToken]
+  );
+};
+
+const deleteOTPSession = async (tempToken) => {
+  await db.query('DELETE FROM otp_codes WHERE temp_token = $1', [tempToken]);
+};
 
 // Generate refresh token
 const generateRefreshToken = () => {
@@ -55,30 +179,26 @@ router.post('/register', validate(schemas.register), async (req, res) => {
 
     const user = result.rows[0];
 
-    // Generate access token (short-lived)
-    const accessToken = jwt.sign(
-      { id: user.id, email: user.email, type: 'user' },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '4h' }
-    );
+    // 2FA: Generate OTP instead of returning tokens directly
+    const { otp, tempToken } = await createOTPSession(user.id, user.email, 'user', { user });
 
-    // Generate refresh token (long-lived)
-    const refreshToken = generateRefreshToken();
-    refreshTokens.set(refreshToken, {
-      userId: user.id,
-      type: 'user',
-      createdAt: Date.now(),
-      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
-    });
+    logger.logAuth('register', user.id, true, { email: user.email, requires2FA: true });
 
-    logger.logAuth('register', user.id, true, { email: user.email });
+    // Send OTP via email
+    await sendOtpEmail(user.email, otp, 'register');
 
-    res.status(201).json({
-      message: 'User registered successfully',
-      user,
-      token: accessToken,
-      refreshToken,
-    });
+    const response = {
+      message: 'Verification code sent to your email',
+      requires2FA: true,
+      tempToken,
+      maskedEmail: maskEmail(user.email),
+    };
+
+    if (process.env.NODE_ENV !== 'production') {
+      response.otp = otp; // Only for development/testing
+    }
+
+    res.status(201).json(response);
   } catch (error) {
     logger.logError(error, req);
     res.status(500).json({ error: 'Registration failed' });
@@ -94,7 +214,7 @@ router.post('/login', validate(schemas.login), async (req, res) => {
 
     // Check for user
     const result = await db.query(
-      'SELECT id, email, password_hash, full_name, phone, status, role, avatar_url FROM users WHERE email = $1',
+      'SELECT id, email, password_hash, full_name, phone, status, role, avatar_url, two_factor_enabled FROM users WHERE email = $1',
       [email.toLowerCase()]
     );
 
@@ -105,49 +225,195 @@ router.post('/login', validate(schemas.login), async (req, res) => {
 
     const user = result.rows[0];
 
-    // Check if user is suspended
-    if (user.status === 'suspended') {
-      logger.logAuth('login', user.id, false, { reason: 'account_suspended' });
-      return res.status(403).json({ error: 'Account suspended. Contact support.' });
-    }
-
-    // Verify password
+    // Verify password first
     const validPassword = await bcrypt.compare(password, user.password_hash);
     if (!validPassword) {
       logger.logAuth('login', user.id, false, { reason: 'invalid_password' });
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    // Generate access token
+    // Check if user is suspended
+    if (user.status === 'suspended') {
+      logger.logAuth('login', user.id, false, { reason: 'account_suspended' });
+      return res.status(403).json({ error: 'Account suspended. Contact support.' });
+    }
+
+    // Remove password hash before storing in session
+    delete user.password_hash;
+
+    // Skip 2FA if user has it disabled
+    if (user.two_factor_enabled === false) {
+      const accessToken = jwt.sign(
+        { id: user.id, email: user.email, type: 'user' },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_EXPIRES_IN || '4h' }
+      );
+
+      const refreshToken = generateRefreshToken();
+      refreshTokens.set(refreshToken, {
+        userId: user.id,
+        type: 'user',
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      });
+
+      delete user.two_factor_enabled;
+      logger.logAuth('login', user.id, true, { email: user.email, requires2FA: false });
+
+      return res.json({
+        message: 'Login successful',
+        requires2FA: false,
+        success: true,
+        user,
+        token: accessToken,
+        refreshToken,
+      });
+    }
+
+    delete user.two_factor_enabled;
+
+    // 2FA: Generate OTP instead of returning tokens directly
+    const { otp, tempToken } = await createOTPSession(user.id, user.email, 'user', { user });
+
+    logger.logAuth('login', user.id, true, { email: user.email, requires2FA: true });
+
+    // Send OTP via email
+    await sendOtpEmail(user.email, otp, 'login');
+
+    const response = {
+      message: 'Verification code sent to your email',
+      requires2FA: true,
+      tempToken,
+      maskedEmail: maskEmail(user.email),
+    };
+
+    if (process.env.NODE_ENV !== 'production') {
+      response.otp = otp; // Only for development/testing
+    }
+
+    res.json(response);
+  } catch (error) {
+    logger.logError(error, req);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// ===========================================
+// VERIFY OTP (2FA)
+// ===========================================
+router.post('/verify-otp', async (req, res) => {
+  try {
+    const { tempToken, otp } = req.body;
+
+    if (!tempToken || !otp) {
+      return res.status(400).json({ error: 'Verification code and session token are required' });
+    }
+
+    const session = await getOTPSession(tempToken);
+
+    if (!session) {
+      return res.status(400).json({ error: 'Session expired. Please login again.' });
+    }
+
+    // Check expiry
+    if (Date.now() > new Date(session.expiresAt).getTime()) {
+      await deleteOTPSession(tempToken);
+      return res.status(400).json({ error: 'Verification code has expired. Please login again.' });
+    }
+
+    // Check attempts (max 5)
+    if (session.attempts >= 5) {
+      await deleteOTPSession(tempToken);
+      return res.status(400).json({ error: 'Too many failed attempts. Please login again.' });
+    }
+
+    // Verify OTP
+    if (session.otp !== otp.toString()) {
+      const attempts = await incrementOtpAttempts(tempToken);
+      return res.status(400).json({
+        error: 'Invalid verification code',
+        attemptsRemaining: Math.max(0, 5 - attempts),
+      });
+    }
+
+    // OTP verified — generate actual auth tokens
     const accessToken = jwt.sign(
-      { id: user.id, email: user.email, type: 'user' },
+      { id: session.userId, email: session.email, type: session.userType },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '4h' }
     );
 
-    // Generate refresh token
     const refreshToken = generateRefreshToken();
     refreshTokens.set(refreshToken, {
-      userId: user.id,
-      type: 'user',
+      userId: session.userId,
+      type: session.userType,
       createdAt: Date.now(),
-      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
+      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
     });
 
-    // Remove password hash from response
-    delete user.password_hash;
+    // Clean up OTP session
+    await deleteOTPSession(tempToken);
 
-    logger.logAuth('login', user.id, true, { email: user.email });
+    logger.logAuth('2fa_verify', session.userId, true, { email: session.email });
 
     res.json({
-      message: 'Login successful',
-      user,
+      message: 'Verification successful',
+      success: true,
+      user: session.userData.user,
       token: accessToken,
       refreshToken,
     });
   } catch (error) {
     logger.logError(error, req);
-    res.status(500).json({ error: 'Login failed' });
+    res.status(500).json({ error: 'Verification failed' });
+  }
+});
+
+// ===========================================
+// RESEND OTP (2FA)
+// ===========================================
+router.post('/resend-otp', async (req, res) => {
+  try {
+    const { tempToken } = req.body;
+
+    if (!tempToken) {
+      return res.status(400).json({ error: 'Session token is required' });
+    }
+
+    const session = await getOTPSession(tempToken);
+
+    if (!session) {
+      return res.status(400).json({ error: 'Session expired. Please login again.' });
+    }
+
+    if (Date.now() > new Date(session.expiresAt).getTime()) {
+      await deleteOTPSession(tempToken);
+      return res.status(400).json({ error: 'Session expired. Please login again.' });
+    }
+
+    // Generate new OTP
+    const newOtp = generateOTP();
+    await updateOtpCode(tempToken, newOtp);
+
+    // Send new OTP via email
+    await sendOtpEmail(session.email, newOtp, 'login');
+
+    const response = {
+      message: 'A new verification code has been sent',
+      success: true,
+      maskedEmail: maskEmail(session.email),
+    };
+
+    if (process.env.NODE_ENV !== 'production') {
+      response.otp = newOtp; // Only for development/testing
+    }
+
+    logger.logAuth('2fa_resend', session.userId, true, { email: session.email });
+
+    res.json(response);
+  } catch (error) {
+    logger.logError(error, req);
+    res.status(500).json({ error: 'Failed to resend verification code' });
   }
 });
 
@@ -162,6 +428,10 @@ router.post('/refresh', async (req, res) => {
       return res.status(400).json({ error: 'Refresh token is required' });
     }
 
+    if (await tokenBlacklist.isBlacklisted(refreshToken)) {
+      return res.status(401).json({ error: 'Refresh token has been revoked' });
+    }
+
     const tokenData = refreshTokens.get(refreshToken);
 
     if (!tokenData) {
@@ -174,8 +444,12 @@ router.post('/refresh', async (req, res) => {
     }
 
     // Get user data
-    const table = tokenData.type === 'admin' ? 'admins' : 'users';
-    const result = await db.query(`SELECT id, email FROM ${table} WHERE id = $1`, [tokenData.userId]);
+    let result;
+    if (tokenData.type === 'admin') {
+      result = await db.query('SELECT id, email FROM admins WHERE id = $1', [tokenData.userId]);
+    } else {
+      result = await db.query('SELECT id, email FROM users WHERE id = $1', [tokenData.userId]);
+    }
 
     if (result.rows.length === 0) {
       refreshTokens.delete(refreshToken);
@@ -231,16 +505,16 @@ router.post('/admin/login', validate(schemas.login), async (req, res) => {
 
     const admin = result.rows[0];
 
-    if (!admin.is_active) {
-      logger.logAuth('admin_login', admin.id, false, { reason: 'account_disabled' });
-      return res.status(403).json({ error: 'Admin account is disabled' });
-    }
-
-    // Verify password
+    // Verify password first
     const validPassword = await bcrypt.compare(password, admin.password_hash);
     if (!validPassword) {
       logger.logAuth('admin_login', admin.id, false, { reason: 'invalid_password' });
       return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    if (!admin.is_active) {
+      logger.logAuth('admin_login', admin.id, false, { reason: 'account_disabled' });
+      return res.status(403).json({ error: 'Admin account is disabled' });
     }
 
     // Update last login
@@ -305,12 +579,26 @@ router.post('/logout', async (req, res) => {
       }
     }
 
-    // Remove refresh token from storage
-    if (refreshToken && refreshTokens.has(refreshToken)) {
+    // Revoke refresh token and remove it from storage
+    if (refreshToken) {
       const tokenData = refreshTokens.get(refreshToken);
-      userId = tokenData.userId;
-      userType = tokenData.type;
-      refreshTokens.delete(refreshToken);
+
+      if (tokenData) {
+        userId = tokenData.userId;
+        userType = tokenData.type;
+      }
+
+      await tokenBlacklist.add(
+        refreshToken,
+        tokenData?.userId || userId,
+        tokenData?.type || userType,
+        'logout_refresh',
+        tokenData?.expiresAt ? new Date(tokenData.expiresAt) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+      );
+
+      if (tokenData) {
+        refreshTokens.delete(refreshToken);
+      }
     }
 
     if (userId) {
@@ -513,7 +801,7 @@ router.post('/reset-password', async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
 
-    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/;
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$/;
     if (!passwordRegex.test(newPassword)) {
       return res.status(400).json({ 
         error: 'Password must contain uppercase, lowercase, number, and special character' 

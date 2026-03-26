@@ -32,31 +32,16 @@ const SETTINGS_SECTIONS = [
     items: [
       { id: 'profile', icon: 'person', label: 'Edit Profile', type: 'link' },
       { id: 'password', icon: 'lock-closed', label: 'Change Password', type: 'link' },
+      { id: 'twoFactor', icon: 'key', label: 'Two-Factor Authentication', type: 'toggle' },
+    ],
+  },
+  {
+    title: 'Activity',
+    items: [
+      { id: 'myAdoptions', icon: 'heart', label: 'My Adoptions', type: 'link' },
+      { id: 'notifications', icon: 'notifications', label: 'Notifications', type: 'link' },
       { id: 'becomeRescuer', icon: 'shield-checkmark', label: 'Become a Rescuer', type: 'link' },
       { id: 'shelter', icon: 'home', label: 'Register a Shelter', type: 'link' },
-    ],
-  },
-  {
-    title: 'My Pets',
-    items: [
-      { id: 'myAdoptedPets', icon: 'heart', label: 'My Adopted Pets', type: 'link' },
-      { id: 'trackMyPets', icon: 'paw', label: 'Track My Pets', type: 'link' },
-    ],
-  },
-  {
-    title: 'Preferences',
-    items: [
-      { id: 'notifications', icon: 'notifications', label: 'Push Notifications', type: 'toggle' },
-      { id: 'emailNotifications', icon: 'mail', label: 'Email Notifications', type: 'toggle' },
-      { id: 'darkMode', icon: 'moon', label: 'Dark Mode', type: 'toggle' },
-      { id: 'language', icon: 'language', label: 'Language', type: 'link', value: 'English' },
-    ],
-  },
-  {
-    title: 'Data & Privacy',
-    items: [
-      { id: 'downloadData', icon: 'download', label: 'Download My Data', type: 'link' },
-      { id: 'deleteAccount', icon: 'trash', label: 'Delete Account', type: 'link', danger: true },
     ],
   },
   {
@@ -74,16 +59,18 @@ const SETTINGS_SECTIONS = [
       { id: 'version', icon: 'information-circle', label: 'App Version', type: 'info', value: '1.0.0' },
     ],
   },
+  {
+    title: 'Danger Zone',
+    items: [
+      { id: 'deleteAccount', icon: 'trash', label: 'Delete Account', type: 'link', danger: true },
+    ],
+  },
 ];
 
-const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavigateToAdoptions, onOpenFeedback, onOpenReportProblem, onNavigateToJemoy, onNavigateToShelterApplication, onNavigateToShelterManager }) => {
+const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavigateToAdoptions, onOpenFeedback, onOpenReportProblem, onNavigateToJemoy, onNavigateToShelterApplication, onNavigateToShelterManager, onNavigateToNotifications }) => {
   const { user, logout, updateUser } = useAuth();
   const [isShelterManager, setIsShelterManager] = useState(false);
-  const [toggleStates, setToggleStates] = useState({
-    notifications: true,
-    emailNotifications: true,
-    darkMode: false,
-  });
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(user?.two_factor_enabled !== false);
   const [userName, setUserName] = useState(user?.full_name || user?.name || 'User');
   const [userEmail, setUserEmail] = useState(user?.email || 'user@example.com');
   const [userAvatar, setUserAvatar] = useState(user?.avatar_url || null);
@@ -107,6 +94,7 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
   const [editAddress, setEditAddress] = useState('');
   const [editCity, setEditCity] = useState('');
   const [tempAvatar, setTempAvatar] = useState(null);
+  const [tempAvatarUrlInput, setTempAvatarUrlInput] = useState('');
   
   // Change password form states
   const [currentPassword, setCurrentPassword] = useState('');
@@ -160,7 +148,7 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
   // Dynamically update shelter settings item based on manager status
   const settingsSections = useMemo(() => {
     return SETTINGS_SECTIONS.map(section => {
-      if (section.title === 'Account') {
+      if (section.title === 'Activity') {
         return {
           ...section,
           items: section.items.map(item => {
@@ -176,11 +164,6 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
       return section;
     });
   }, [isShelterManager]);
-
-  // Fetch user profile from API to get the most up-to-date data
-  useEffect(() => {
-    fetchUserProfile();
-  }, []);
 
   useEffect(() => {
     if (user?.id) {
@@ -199,6 +182,7 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
         setUserBio(data.bio || '');
         setUserAddress(data.address || '');
         setUserCity(data.city || '');
+        setTwoFactorEnabled(data.two_factor_enabled !== false);
         if (data.avatar_url) {
           setUserAvatar(data.avatar_url);
         }
@@ -208,16 +192,40 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
     }
   }, []);
 
-  const handleToggle = useCallback((id) => {
-    if (id === 'darkMode') {
-      Alert.alert('Dark Mode', 'Dark mode feature coming soon!');
-      return;
+  const handleToggle2FA = useCallback(async () => {
+    const previousValue = twoFactorEnabled;
+    try {
+      const newValue = !twoFactorEnabled;
+      setTwoFactorEnabled(newValue);
+      const response = await userService.toggle2FA();
+      const enabled = response.data.two_factor_enabled;
+      setTwoFactorEnabled(enabled);
+      Alert.alert(
+        'Two-Factor Authentication',
+        enabled
+          ? 'OTP verification is now required when you log in.'
+          : 'OTP verification has been turned off. You will log in directly with your password.'
+      );
+    } catch (error) {
+      setTwoFactorEnabled(previousValue);
+      Alert.alert('Error', 'Failed to update 2FA setting');
     }
-    setToggleStates((prev) => ({
-      ...prev,
-      [id]: !prev[id],
-    }));
-  }, []);
+  }, [twoFactorEnabled]);
+
+  const handleDeleteAccount = useCallback(async () => {
+    try {
+      setLoading(true);
+      await userService.deleteAccount();
+      await logout();
+      if (onLogout) {
+        onLogout();
+      }
+    } catch (error) {
+      Alert.alert('Error', error?.message || 'Failed to delete account. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, [logout, onLogout]);
 
   const handleLogout = useCallback(() => {
     Alert.alert(
@@ -252,6 +260,7 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
     setEditAddress(userAddress);
     setEditCity(userCity);
     setTempAvatar(null);
+    setTempAvatarUrlInput('');
     setEditProfileModalVisible(true);
   }, [userName, userPhone, userBio, userAddress, userCity]);
 
@@ -260,25 +269,17 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
       openEditProfileModal();
     } else if (item.id === 'password') {
       openChangePasswordModal();
-    } else if (item.id === 'myAdoptedPets') {
-      // Navigate to adoptions screen with approved filter
+    } else if (item.id === 'myAdoptions') {
       if (onNavigateToAdoptions) {
-        onNavigateToAdoptions('approved');
-      } else {
-        Alert.alert('My Adopted Pets', 'View your adopted pets in the Adoptions section.');
+        onNavigateToAdoptions();
       }
-    } else if (item.id === 'trackMyPets') {
-      // Navigate to adoptions screen to track deliveries
-      if (onNavigateToAdoptions) {
-        onNavigateToAdoptions('approved');
-      } else {
-        Alert.alert('Track My Pets', 'Track your pet deliveries in the Adoptions section.');
+    } else if (item.id === 'notifications') {
+      if (onNavigateToNotifications) {
+        onNavigateToNotifications();
       }
     } else if (item.id === 'becomeRescuer') {
       if (onNavigateToRescuerRegistration) {
         onNavigateToRescuerRegistration();
-      } else {
-        Alert.alert('Become a Rescuer', 'Become a Rescuer feature coming soon!');
       }
     } else if (item.id === 'shelter') {
       if (isShelterManager) {
@@ -294,42 +295,18 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
       if (onOpenFeedback) {
         onOpenFeedback();
       } else {
-        // Open email client for feedback
         Linking.openURL('mailto:support@pawmilya.com?subject=App Feedback');
       }
     } else if (item.id === 'report') {
       if (onOpenReportProblem) {
         onOpenReportProblem();
       } else {
-        // Open email client for reporting problems
         Linking.openURL('mailto:support@pawmilya.com?subject=Report a Problem');
       }
     } else if (item.id === 'terms') {
       setTermsModalVisible(true);
     } else if (item.id === 'privacy') {
       setPrivacyModalVisible(true);
-    } else if (item.id === 'language') {
-      Alert.alert(
-        'Select Language',
-        'Choose your preferred language',
-        [
-          { text: 'English', onPress: () => Alert.alert('Language', 'Language set to English') },
-          { text: 'Filipino', onPress: () => Alert.alert('Language', 'Filipino language support coming soon!') },
-          { text: 'Cancel', style: 'cancel' },
-        ]
-      );
-    } else if (item.id === 'downloadData') {
-      Alert.alert(
-        'Download My Data',
-        'We will prepare a copy of your data. You will receive an email with a download link within 24-48 hours.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { 
-            text: 'Request Download', 
-            onPress: () => Alert.alert('Request Submitted', 'You will receive an email with your data download link.') 
-          },
-        ]
-      );
     } else if (item.id === 'deleteAccount') {
       Alert.alert(
         'Delete Account',
@@ -342,13 +319,13 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
             onPress: () => {
               Alert.alert(
                 'Confirm Deletion',
-                'Please type "DELETE" to confirm account deletion.',
+                'This is irreversible. Are you absolutely sure?',
                 [
                   { text: 'Cancel', style: 'cancel' },
                   { 
                     text: 'I understand, delete my account', 
                     style: 'destructive',
-                    onPress: () => Alert.alert('Account Deletion', 'Your account deletion request has been submitted. You will be logged out.') 
+                    onPress: handleDeleteAccount,
                   },
                 ]
               );
@@ -356,10 +333,8 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
           },
         ]
       );
-    } else if (item.type === 'link') {
-      Alert.alert(item.label, `${item.label} feature coming soon!`);
     }
-  }, [onNavigateToRescuerRegistration, onNavigateToAdoptions, onOpenFeedback, onOpenReportProblem, onNavigateToJemoy, onNavigateToShelterApplication, onNavigateToShelterManager, isShelterManager, openEditProfileModal]);
+  }, [onNavigateToRescuerRegistration, onNavigateToAdoptions, onNavigateToNotifications, onOpenFeedback, onOpenReportProblem, onNavigateToShelterApplication, onNavigateToShelterManager, isShelterManager, openEditProfileModal, handleDeleteAccount]);
 
   const pickImage = useCallback(async () => {
     try {
@@ -415,10 +390,32 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
       [
         { text: 'Take Photo', onPress: takePhoto },
         { text: 'Choose from Library', onPress: pickImage },
+        {
+          text: 'Use Image URL',
+          onPress: () => {
+            setTempAvatarUrlInput(tempAvatar || '');
+          },
+        },
         { text: 'Cancel', style: 'cancel' },
       ]
     );
-  }, [takePhoto, pickImage]);
+  }, [pickImage, takePhoto, tempAvatar]);
+
+  const setAvatarFromUrl = useCallback(() => {
+    const trimmedUrl = tempAvatarUrlInput.trim();
+    if (!trimmedUrl) {
+      Alert.alert('Validation Error', 'Please enter an image URL.');
+      return;
+    }
+
+    if (!/^https?:\/\//i.test(trimmedUrl)) {
+      Alert.alert('Invalid URL', 'Image URL must start with http:// or https://');
+      return;
+    }
+
+    setTempAvatar(trimmedUrl);
+    setTempAvatarUrlInput('');
+  }, [tempAvatarUrlInput]);
 
   const handleSaveProfile = useCallback(async () => {
     if (!editName.trim()) {
@@ -432,18 +429,23 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
     try {
       // Upload avatar if changed
       if (tempAvatar) {
-        setUploadingAvatar(true);
-        try {
-          const avatarResponse = await userService.uploadAvatar(tempAvatar);
-          if (avatarResponse.avatar_url) {
-            newAvatarUrl = avatarResponse.avatar_url;
-            setUserAvatar(newAvatarUrl);
+        if (tempAvatar.startsWith('http://') || tempAvatar.startsWith('https://')) {
+          newAvatarUrl = tempAvatar;
+          setUserAvatar(newAvatarUrl);
+        } else {
+          setUploadingAvatar(true);
+          try {
+            const avatarResponse = await userService.uploadAvatar(tempAvatar);
+            if (avatarResponse.avatar_url) {
+              newAvatarUrl = avatarResponse.avatar_url;
+              setUserAvatar(newAvatarUrl);
+            }
+          } catch (avatarError) {
+            console.error('Avatar upload error:', avatarError);
+            Alert.alert('Warning', 'Profile updated but avatar upload failed');
           }
-        } catch (avatarError) {
-          console.error('Avatar upload error:', avatarError);
-          Alert.alert('Warning', 'Profile updated but avatar upload failed');
+          setUploadingAvatar(false);
         }
-        setUploadingAvatar(false);
       }
 
       // Update profile data
@@ -507,8 +509,8 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
       return;
     }
 
-    if (newPassword.length < 6) {
-      Alert.alert('Error', 'New password must be at least 6 characters');
+    if (newPassword.length < 8) {
+      Alert.alert('Error', 'New password must be at least 8 characters');
       return;
     }
 
@@ -547,15 +549,15 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
         onPress={() => {
           if (item.type === 'link') {
             handleSettingPress(item);
-          } else if (item.type === 'toggle') {
-            handleToggle(item.id);
+          } else if (item.type === 'toggle' && item.id === 'twoFactor') {
+            handleToggle2FA();
           }
         }}
         disabled={isDisabled}
         activeOpacity={0.7}
         accessibilityLabel={item.label}
         accessibilityRole={item.type === 'toggle' ? 'switch' : 'button'}
-        accessibilityState={item.type === 'toggle' ? { checked: toggleStates[item.id] } : undefined}
+        accessibilityState={item.type === 'toggle' ? { checked: twoFactorEnabled } : undefined}
       >
         <View style={styles.settingLeft}>
           <View style={[styles.settingIcon, isDanger && { backgroundColor: '#FFEBEE' }]}>
@@ -570,20 +572,13 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
           </Text>
         </View>
         <View style={styles.settingRight}>
-          {item.type === 'toggle' && (
+          {item.type === 'toggle' && item.id === 'twoFactor' && (
             <Switch
-              value={toggleStates[item.id]}
-              onValueChange={() => handleToggle(item.id)}
+              value={twoFactorEnabled}
+              onValueChange={handleToggle2FA}
               trackColor={{ false: COLORS.borderLight, true: COLORS.primary + '80' }}
-              thumbColor={toggleStates[item.id] ? COLORS.primary : COLORS.textMedium}
-              disabled={isDisabled}
+              thumbColor={twoFactorEnabled ? COLORS.primary : COLORS.textMedium}
             />
-          )}
-          {item.type === 'link' && item.value && (
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Text style={[styles.settingValue, { marginRight: 8 }]}>{item.value}</Text>
-              <Ionicons name="chevron-forward" size={20} color={COLORS.textMedium} />
-            </View>
           )}
           {item.type === 'link' && !item.value && (
             <Ionicons name="chevron-forward" size={20} color={isDanger ? '#F44336' : COLORS.textMedium} />
@@ -594,7 +589,7 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
         </View>
       </TouchableOpacity>
     );
-  }, [toggleStates, handleSettingPress, handleToggle]);
+  }, [handleSettingPress, handleToggle2FA, twoFactorEnabled]);
 
   // Edit Profile Modal
   const renderEditProfileModal = () => (
@@ -647,6 +642,20 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
                 )}
               </TouchableOpacity>
               <Text style={styles.changePhotoText}>Tap to change photo</Text>
+              <View style={styles.avatarUrlRow}>
+                <TextInput
+                  style={styles.avatarUrlInput}
+                  placeholder="Paste avatar URL (https://...)"
+                  placeholderTextColor={COLORS.textMedium}
+                  value={tempAvatarUrlInput}
+                  onChangeText={setTempAvatarUrlInput}
+                  autoCapitalize="none"
+                  keyboardType="url"
+                />
+                <TouchableOpacity style={styles.avatarUrlButton} onPress={setAvatarFromUrl}>
+                  <Ionicons name="link" size={18} color={COLORS.textWhite} />
+                </TouchableOpacity>
+              </View>
             </View>
 
             {/* Form Fields */}
@@ -774,7 +783,7 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
                   style={styles.passwordInput}
                   value={newPassword}
                   onChangeText={setNewPassword}
-                  placeholder="Enter new password (min 6 characters)"
+                  placeholder="Enter new password (min 8 characters)"
                   placeholderTextColor={COLORS.textMedium}
                   secureTextEntry={!showNewPassword}
                 />
@@ -818,7 +827,7 @@ const UserSettingsScreen = ({ onLogout, onNavigateToRescuerRegistration, onNavig
             <View style={styles.passwordHint}>
               <Ionicons name="information-circle" size={16} color={COLORS.textMedium} />
               <Text style={styles.passwordHintText}>
-                Password must be at least 6 characters long
+                Password must be at least 8 characters long
               </Text>
             </View>
 
@@ -1435,6 +1444,31 @@ const styles = StyleSheet.create({
     fontSize: FONTS.sizes.sm,
     color: COLORS.primary,
     marginTop: SPACING.sm,
+  },
+  avatarUrlRow: {
+    marginTop: SPACING.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+  },
+  avatarUrlInput: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.borderLight,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm + 2,
+    color: COLORS.textDark,
+    marginRight: SPACING.sm,
+  },
+  avatarUrlButton: {
+    width: 40,
+    height: 40,
+    borderRadius: RADIUS.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primary,
   },
 
   // Form Styles

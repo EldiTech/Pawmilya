@@ -31,6 +31,12 @@ router.get('/', async (req, res) => {
     const params = [];
     let paramIndex = 1;
 
+    if (category) {
+      query += ` AND pc.name ILIKE $${paramIndex}`;
+      params.push(`%${category}%`);
+      paramIndex++;
+    }
+
     if (breed) {
       query += ` AND p.breed_name ILIKE $${paramIndex}`;
       params.push(`%${breed}%`);
@@ -125,6 +131,80 @@ router.get('/breeds/:categoryId', async (req, res) => {
   } catch (error) {
     console.error('Get breeds error:', error);
     res.status(500).json({ error: 'Failed to get breeds' });
+  }
+});
+
+// Search pets (dedicated route so /:id doesn't catch it)
+router.get('/search', async (req, res) => {
+  try {
+    const { name, category, breed, size, gender, location, limit = 20, offset = 0 } = req.query;
+
+    let query = `
+      SELECT p.id, p.name, p.gender, p.size, p.color,
+             CASE WHEN p.age_years > 0 THEN p.age_years || ' years' ELSE p.age_months || ' months' END as age,
+             p.breed_name as breed,
+             pc.name as species,
+             p.location, p.status, p.is_featured, p.description, p.adoption_fee,
+             p.vaccination_status, p.is_neutered, p.is_house_trained,
+             p.is_good_with_kids, p.is_good_with_other_pets, p.special_needs,
+             COALESCE(
+               (SELECT image_url FROM pet_images WHERE pet_id = p.id AND is_primary = TRUE LIMIT 1),
+               (SELECT image_url FROM pet_images WHERE pet_id = p.id ORDER BY display_order LIMIT 1),
+               CASE WHEN p.images IS NOT NULL AND array_length(p.images, 1) > 0 THEN p.images[1] ELSE NULL END
+             ) as image,
+             p.created_at
+      FROM pets p
+      LEFT JOIN pet_categories pc ON p.category_id = pc.id
+      WHERE p.status = 'available'
+    `;
+
+    const params = [];
+    let paramIndex = 1;
+
+    if (name) {
+      query += ` AND p.name ILIKE $${paramIndex}`;
+      params.push(`%${name}%`);
+      paramIndex++;
+    }
+
+    if (category) {
+      query += ` AND pc.name ILIKE $${paramIndex}`;
+      params.push(`%${category}%`);
+      paramIndex++;
+    }
+
+    if (breed) {
+      query += ` AND p.breed_name ILIKE $${paramIndex}`;
+      params.push(`%${breed}%`);
+      paramIndex++;
+    }
+
+    if (size) {
+      query += ` AND p.size = $${paramIndex}`;
+      params.push(size);
+      paramIndex++;
+    }
+
+    if (gender) {
+      query += ` AND p.gender = $${paramIndex}`;
+      params.push(gender);
+      paramIndex++;
+    }
+
+    if (location) {
+      query += ` AND p.location ILIKE $${paramIndex}`;
+      params.push(`%${location}%`);
+      paramIndex++;
+    }
+
+    query += ` ORDER BY p.is_featured DESC, p.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(parseInt(limit), parseInt(offset));
+
+    const result = await db.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Search pets error:', error);
+    res.status(500).json({ error: 'Failed to search pets' });
   }
 });
 

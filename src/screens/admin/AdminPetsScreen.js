@@ -33,6 +33,14 @@ const STATUS_COLORS = PET_STATUS_CONFIG;
 const getImageUrl = (imagePath) => 
   getImageUrlUtil(imagePath, CONFIG.API_URL) || 'https://via.placeholder.com/80?text=🐾';
 
+const DEFAULT_PET_CATEGORIES = [
+  { id: 1, name: 'Dog' },
+  { id: 2, name: 'Cat' },
+  { id: 3, name: 'Bird' },
+  { id: 4, name: 'Rabbit' },
+  { id: 5, name: 'Other' },
+];
+
 const AdminPetsScreen = ({ onGoBack, onNavigate, adminToken }) => {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
@@ -43,6 +51,7 @@ const AdminPetsScreen = ({ onGoBack, onNavigate, adminToken }) => {
   const [viewModalVisible, setViewModalVisible] = useState(false);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editFormData, setEditFormData] = useState({});
+  const [petCategories, setPetCategories] = useState(DEFAULT_PET_CATEGORIES);
   const [saving, setSaving] = useState(false);
   const { fadeAnim } = useFadeAnimation();
 
@@ -79,6 +88,28 @@ const AdminPetsScreen = ({ onGoBack, onNavigate, adminToken }) => {
   useEffect(() => {
     fetchPets();
   }, [filter]);
+
+  useEffect(() => {
+    fetchPetCategories();
+  }, []);
+
+  const fetchPetCategories = useCallback(async () => {
+    try {
+      const response = await fetch(`${CONFIG.API_URL}/pets/categories`, {
+        headers: {
+          'Authorization': `Bearer ${adminToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await response.json();
+      if (Array.isArray(data) && data.length > 0) {
+        setPetCategories(data.map((cat) => ({ id: cat.id, name: cat.name })));
+      }
+    } catch (error) {
+      // Keep fallback categories if the fetch fails.
+    }
+  }, [adminToken]);
 
   const fetchPets = useCallback(async () => {
     try {
@@ -126,11 +157,14 @@ const AdminPetsScreen = ({ onGoBack, onNavigate, adminToken }) => {
   };
 
   const handleEdit = (pet) => {
+    const matchedCategory = petCategories.find((cat) =>
+      cat.name?.toLowerCase() === pet.type?.toLowerCase()
+    );
     setSelectedPet(pet);
     setEditFormData({
       name: pet.name || '',
       breed_name: pet.breed || pet.breed_name || '',
-      category_id: pet.category_id || (pet.type?.toLowerCase() === 'cat' ? 2 : 1),
+      category_id: pet.category_id || matchedCategory?.id || petCategories[0]?.id || 1,
       age_years: pet.age_years?.toString() || '',
       age_months: pet.age_months?.toString() || '',
       gender: pet.gender || '',
@@ -635,7 +669,7 @@ const AdminPetsScreen = ({ onGoBack, onNavigate, adminToken }) => {
                 <View style={styles.editFormGroup}>
                   <Text style={styles.editLabel}>Category</Text>
                   <View style={styles.statusButtons}>
-                    {[{ id: 1, name: 'Dog' }, { id: 2, name: 'Cat' }].map((cat) => (
+                    {petCategories.map((cat) => (
                       <TouchableOpacity
                         key={cat.id}
                         style={[

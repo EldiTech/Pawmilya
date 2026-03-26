@@ -81,6 +81,16 @@ class ApiService {
     }
   }
 
+  // Remove refresh token from storage and clear cache
+  async removeRefreshToken() {
+    this._refreshTokenCache = null;
+    try {
+      await AsyncStorage.removeItem(CONFIG.STORAGE_KEYS.REFRESH_TOKEN);
+    } catch (error) {
+      // Silent fail
+    }
+  }
+
   // Attempt to refresh the access token
   async refreshAccessToken() {
     try {

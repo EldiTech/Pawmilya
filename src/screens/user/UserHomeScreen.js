@@ -26,7 +26,7 @@ import {
   BottomSpacing,
 } from './shared';
 
-const UserHomeScreen = ({ onNavigateToRescue, onNavigateToPets, onNavigateToNotifications, onNavigateToReportRescue, onNavigateToAdoptions, activeTab }) => {
+const UserHomeScreen = ({ onNavigateToRescue, onNavigateToPets, onNavigateToNotifications, onNavigateToReportRescue, onNavigateToAdoptions, activeTab, notificationRefreshKey = 0 }) => {
   const { user } = useAuth();
   const [userData, setUserData] = useState({
     name: '',
@@ -158,6 +158,13 @@ const UserHomeScreen = ({ onNavigateToRescue, onNavigateToPets, onNavigateToNoti
       fetchNotificationCount();
     }
   }, [activeTab, fetchNotificationCount]);
+
+  // Force immediate badge refresh after notification actions complete.
+  useEffect(() => {
+    if (activeTab === 'home') {
+      fetchNotificationCount();
+    }
+  }, [notificationRefreshKey, activeTab, fetchNotificationCount]);
 
   // Set up interval to poll for notifications every 30 seconds
   useEffect(() => {

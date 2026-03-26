@@ -595,8 +595,8 @@ const UserRescuerRegistrationScreen = ({ onGoBack }) => {
         setExistingApplication(null);
       }
     } catch (error) {
-      // Silently ignore 403 errors (user suspended)
-      if (error?.status !== 403) {
+      // Silently ignore 401/403 errors (session expired / user suspended)
+      if (error?.status !== 403 && error?.status !== 401) {
         console.error('Error checking application status:', error);
       }
       setExistingApplication(null);

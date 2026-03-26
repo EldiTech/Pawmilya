@@ -190,9 +190,9 @@ router.post('/', optionalAuth, async (req, res) => {
     const result = await db.query(
       `INSERT INTO rescue_reports (
         reporter_id, reporter_name, reporter_phone, reporter_email,
-        title, description, animal_type, condition, urgency,
+        title, description, animal_type, estimated_count, condition, urgency,
         location_description, address, city, latitude, longitude, images
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING id, title, status, urgency, images, created_at, reporter_id`,
       [
         req.user?.id || null,
@@ -202,6 +202,7 @@ router.post('/', optionalAuth, async (req, res) => {
         title,
         description,
         animal_type || 'unknown',
+        req.body.estimated_count || 1,
         condition || 'unknown',
         urgency || 'normal',
         location_description,
@@ -431,7 +432,8 @@ router.post('/:id/images', optionalAuth, async (req, res) => {
 router.put('/:id/respond', authenticateToken, async (req, res) => {
   try {
     const reportId = req.params.id;
-    const { rescuer_id, action, decline_reason } = req.body;
+    const { action, decline_reason } = req.body;
+    const rescuerId = req.user.id;
 
     // Get the report details
     const reportResult = await db.query(
@@ -453,11 +455,11 @@ router.put('/:id/respond', authenticateToken, async (req, res) => {
         report.status,
         report.status,
         'rescuer',
-        rescuer_id,
+        rescuerId,
         req.user?.full_name || 'Rescuer',
         { reason: decline_reason }
       );
-      console.log(`Rescuer ${rescuer_id} declined rescue ${reportId}: ${decline_reason}`);
+      console.log(`Rescuer ${rescuerId} declined rescue ${reportId}: ${decline_reason}`);
       return res.json({ 
         message: 'Rescue declined',
         declined: true
@@ -472,7 +474,7 @@ router.put('/:id/respond', authenticateToken, async (req, res) => {
            responded_at = NOW(),
            updated_at = NOW()
        WHERE id = $2`,
-      [rescuer_id, reportId]
+      [rescuerId, reportId]
     );
 
     // Log rescue accepted in history
@@ -482,7 +484,7 @@ router.put('/:id/respond', authenticateToken, async (req, res) => {
       report.status,
       'in_progress',
       'rescuer',
-      rescuer_id,
+      rescuerId,
       req.user?.full_name || 'Rescuer',
       { action: 'accepted', rescuer_name: req.user?.full_name || 'Rescuer' }
     );
@@ -514,6 +516,7 @@ router.put('/:id/status', authenticateToken, async (req, res) => {
   try {
     const reportId = req.params.id;
     const { status, notes, completion_photo } = req.body;
+    const rescuerId = req.user.id;
 
     console.log(`📋 Status update request: rescueId=${reportId}, newStatus=${status}, userId=${req.user?.id}`);
 
@@ -537,6 +540,10 @@ router.put('/:id/status', authenticateToken, async (req, res) => {
 
     const report = reportResult.rows[0];
     const isRegisteredUser = !!report.reporter_id;
+
+    if (report.rescuer_id && report.rescuer_id !== rescuerId) {
+      return res.status(403).json({ error: 'You are not assigned to this rescue' });
+    }
     
     console.log(`📋 Current report state: currentStatus=${report.current_status}, rescuerId=${report.rescuer_id}`);
 
@@ -567,6 +574,12 @@ router.put('/:id/status', authenticateToken, async (req, res) => {
     `;
     const params = [status, notes];
     let paramIndex = 3;
+
+    if (!report.rescuer_id) {
+      updateQuery += `, rescuer_id = $${paramIndex}`;
+      params.push(rescuerId);
+      paramIndex++;
+    }
 
     // Add timestamps based on status
     if (status === 'on_the_way') {
@@ -657,7 +670,11 @@ router.put('/:id/status', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Update rescue status error:', error);
-    res.status(500).json({ error: `Failed to update status: ${error.message}` });
+    res.status(500).json({
+      error: process.env.NODE_ENV === 'production'
+        ? 'Internal server error'
+        : `Failed to update status: ${error.message}`,
+    });
   }
 });
 
@@ -666,12 +683,17 @@ router.get('/rescuer/my-rescues', authenticateToken, async (req, res) => {
   try {
     const result = await db.query(
       `SELECT rr.*, 
+              str.id as shelter_transfer_request_id,
               str.status as shelter_transfer_status,
               str.shelter_id as transferred_shelter_id,
-              s.name as transferred_shelter_name
+              s.name as transferred_shelter_name,
+              s.address as transferred_shelter_address,
+              s.city as transferred_shelter_city,
+              s.latitude as transferred_shelter_latitude,
+              s.longitude as transferred_shelter_longitude
        FROM rescue_reports rr
        LEFT JOIN shelter_transfer_requests str ON str.rescue_report_id = rr.id 
-         AND str.status IN ('approved', 'completed')
+         AND str.status IN ('approved', 'accepted', 'in_transit', 'arrived_at_shelter', 'completed')
        LEFT JOIN shelters s ON s.id = str.shelter_id
        WHERE rr.rescuer_id = $1 
        ORDER BY 

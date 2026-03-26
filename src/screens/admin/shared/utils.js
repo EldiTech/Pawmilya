@@ -3,6 +3,8 @@
  * Common helper functions used across admin screens
  */
 
+import { normalizeImageUrl } from '../../../utils/imageUrl';
+
 /**
  * Format a date to a readable string
  * @param {string} dateString - The date string to format
@@ -13,6 +15,7 @@ export const formatDate = (dateString, options = {}) => {
   if (!dateString) return options.fallback || 'N/A';
   
   const date = new Date(dateString);
+  if (isNaN(date.getTime())) return options.fallback || 'N/A';
   
   if (options.includeTime) {
     return date.toLocaleDateString('en-US', {
@@ -75,7 +78,7 @@ export const formatNumber = (num) => {
  */
 export const debounce = (func, wait = 300) => {
   let timeout;
-  return (...args) => {
+  return function(...args) {
     clearTimeout(timeout);
     timeout = setTimeout(() => func.apply(this, args), wait);
   };
@@ -236,30 +239,5 @@ export const groupBy = (items, field) => {
  * @returns {string|null} The full image URL or null
  */
 export const getImageUrl = (imagePath, apiUrl) => {
-  if (!imagePath) return null;
-  
-  // If it's a base64 data URL, use it directly
-  if (typeof imagePath === 'string' && imagePath.startsWith('data:image')) {
-    return imagePath;
-  }
-  
-  // If it's already a full URL, extract the path and rebuild with current base URL
-  if (typeof imagePath === 'string' && imagePath.startsWith('http')) {
-    try {
-      const url = new URL(imagePath);
-      const path = url.pathname;
-      const baseUrl = apiUrl.replace('/api', '');
-      return `${baseUrl}${path}`;
-    } catch {
-      return imagePath;
-    }
-  }
-  
-  // Build URL from relative path
-  if (typeof imagePath === 'string') {
-    const baseUrl = apiUrl.replace('/api', '');
-    return `${baseUrl}${imagePath}`;
-  }
-  
-  return null;
+  return normalizeImageUrl(imagePath, null);
 };

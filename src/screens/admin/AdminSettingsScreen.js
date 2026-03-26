@@ -11,7 +11,6 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
-  Switch,
   Linking,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -28,76 +27,6 @@ const AdminSettingsScreen = ({ onGoBack, adminToken }) => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   
-  // App Settings State
-  const [appSettings, setAppSettings] = useState({
-    enableAdoptions: true,
-    enableRescues: true,
-    enableNewRegistrations: true,
-    maintenanceMode: false,
-    emailNotifications: true,
-    autoApproveRescuers: false,
-  });
-
-  const handleToggleSetting = useCallback((key) => {
-    if (key === 'maintenanceMode') {
-      Alert.alert(
-        'Maintenance Mode',
-        appSettings.maintenanceMode 
-          ? 'Are you sure you want to disable maintenance mode? Users will be able to access the app again.'
-          : 'Are you sure you want to enable maintenance mode? Users will see a maintenance message.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Confirm',
-            onPress: () => {
-              setAppSettings(prev => ({ ...prev, [key]: !prev[key] }));
-              Alert.alert('Success', `Maintenance mode ${!appSettings.maintenanceMode ? 'enabled' : 'disabled'}`);
-            },
-          },
-        ]
-      );
-    } else {
-      setAppSettings(prev => ({ ...prev, [key]: !prev[key] }));
-    }
-  }, [appSettings.maintenanceMode]);
-
-  const handleExportData = useCallback(() => {
-    Alert.alert(
-      'Export Data',
-      'What data would you like to export?',
-      [
-        {
-          text: 'Users',
-          onPress: () => Alert.alert('Export Started', 'User data export has been initiated. You will receive an email when ready.'),
-        },
-        {
-          text: 'Pets',
-          onPress: () => Alert.alert('Export Started', 'Pet data export has been initiated. You will receive an email when ready.'),
-        },
-        {
-          text: 'All Data',
-          onPress: () => Alert.alert('Export Started', 'Full data export has been initiated. You will receive an email when ready.'),
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    );
-  }, []);
-
-  const handleClearCache = useCallback(() => {
-    Alert.alert(
-      'Clear Cache',
-      'This will clear all cached data. Are you sure?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Clear',
-          style: 'destructive',
-          onPress: () => Alert.alert('Success', 'Cache has been cleared successfully.'),
-        },
-      ]
-    );
-  }, []);
-
   const handleContactSupport = useCallback(() => {
     Linking.openURL('mailto:admin-support@pawmilya.com?subject=Admin Support Request');
   }, []);
@@ -344,126 +273,6 @@ const AdminSettingsScreen = ({ onGoBack, adminToken }) => {
             </View>
           </View>
 
-          {/* App Configuration Section */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionIconWrap}>
-                <Ionicons name="settings" size={20} color={ADMIN_COLORS.primary} />
-              </View>
-              <Text style={styles.sectionTitle}>App Configuration</Text>
-            </View>
-
-            <View style={styles.settingsList}>
-              <View style={styles.settingItem}>
-                <View style={styles.settingInfo}>
-                  <Ionicons name="heart" size={20} color={ADMIN_COLORS.primary} />
-                  <View style={styles.settingTextWrap}>
-                    <Text style={styles.settingLabel}>Enable Adoptions</Text>
-                    <Text style={styles.settingDesc}>Allow users to submit adoption requests</Text>
-                  </View>
-                </View>
-                <Switch
-                  value={appSettings.enableAdoptions}
-                  onValueChange={() => handleToggleSetting('enableAdoptions')}
-                  trackColor={{ false: '#E0E0E0', true: ADMIN_COLORS.primary + '60' }}
-                  thumbColor={appSettings.enableAdoptions ? ADMIN_COLORS.primary : '#BDBDBD'}
-                />
-              </View>
-
-              <View style={styles.settingItem}>
-                <View style={styles.settingInfo}>
-                  <MaterialCommunityIcons name="ambulance" size={20} color={ADMIN_COLORS.primary} />
-                  <View style={styles.settingTextWrap}>
-                    <Text style={styles.settingLabel}>Enable Rescues</Text>
-                    <Text style={styles.settingDesc}>Allow users to submit rescue reports</Text>
-                  </View>
-                </View>
-                <Switch
-                  value={appSettings.enableRescues}
-                  onValueChange={() => handleToggleSetting('enableRescues')}
-                  trackColor={{ false: '#E0E0E0', true: ADMIN_COLORS.primary + '60' }}
-                  thumbColor={appSettings.enableRescues ? ADMIN_COLORS.primary : '#BDBDBD'}
-                />
-              </View>
-
-              <View style={styles.settingItem}>
-                <View style={styles.settingInfo}>
-                  <Ionicons name="person-add" size={20} color={ADMIN_COLORS.primary} />
-                  <View style={styles.settingTextWrap}>
-                    <Text style={styles.settingLabel}>New Registrations</Text>
-                    <Text style={styles.settingDesc}>Allow new users to sign up</Text>
-                  </View>
-                </View>
-                <Switch
-                  value={appSettings.enableNewRegistrations}
-                  onValueChange={() => handleToggleSetting('enableNewRegistrations')}
-                  trackColor={{ false: '#E0E0E0', true: ADMIN_COLORS.primary + '60' }}
-                  thumbColor={appSettings.enableNewRegistrations ? ADMIN_COLORS.primary : '#BDBDBD'}
-                />
-              </View>
-
-              <View style={styles.settingItem}>
-                <View style={styles.settingInfo}>
-                  <Ionicons name="shield-checkmark" size={20} color={ADMIN_COLORS.primary} />
-                  <View style={styles.settingTextWrap}>
-                    <Text style={styles.settingLabel}>Auto-Approve Rescuers</Text>
-                    <Text style={styles.settingDesc}>Automatically approve rescuer applications</Text>
-                  </View>
-                </View>
-                <Switch
-                  value={appSettings.autoApproveRescuers}
-                  onValueChange={() => handleToggleSetting('autoApproveRescuers')}
-                  trackColor={{ false: '#E0E0E0', true: ADMIN_COLORS.primary + '60' }}
-                  thumbColor={appSettings.autoApproveRescuers ? ADMIN_COLORS.primary : '#BDBDBD'}
-                />
-              </View>
-
-              <View style={[styles.settingItem, { borderBottomWidth: 0 }]}>
-                <View style={styles.settingInfo}>
-                  <Ionicons name="construct" size={20} color="#FF9800" />
-                  <View style={styles.settingTextWrap}>
-                    <Text style={styles.settingLabel}>Maintenance Mode</Text>
-                    <Text style={styles.settingDesc}>Temporarily disable app access</Text>
-                  </View>
-                </View>
-                <Switch
-                  value={appSettings.maintenanceMode}
-                  onValueChange={() => handleToggleSetting('maintenanceMode')}
-                  trackColor={{ false: '#E0E0E0', true: '#FF9800' + '60' }}
-                  thumbColor={appSettings.maintenanceMode ? '#FF9800' : '#BDBDBD'}
-                />
-              </View>
-            </View>
-          </View>
-
-          {/* Notifications Section */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionIconWrap}>
-                <Ionicons name="notifications" size={20} color={ADMIN_COLORS.primary} />
-              </View>
-              <Text style={styles.sectionTitle}>Notifications</Text>
-            </View>
-
-            <View style={styles.settingsList}>
-              <View style={[styles.settingItem, { borderBottomWidth: 0 }]}>
-                <View style={styles.settingInfo}>
-                  <Ionicons name="mail" size={20} color={ADMIN_COLORS.primary} />
-                  <View style={styles.settingTextWrap}>
-                    <Text style={styles.settingLabel}>Email Notifications</Text>
-                    <Text style={styles.settingDesc}>Receive email alerts for important events</Text>
-                  </View>
-                </View>
-                <Switch
-                  value={appSettings.emailNotifications}
-                  onValueChange={() => handleToggleSetting('emailNotifications')}
-                  trackColor={{ false: '#E0E0E0', true: ADMIN_COLORS.primary + '60' }}
-                  thumbColor={appSettings.emailNotifications ? ADMIN_COLORS.primary : '#BDBDBD'}
-                />
-              </View>
-            </View>
-          </View>
-
           {/* System Actions Section */}
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
@@ -474,31 +283,31 @@ const AdminSettingsScreen = ({ onGoBack, adminToken }) => {
             </View>
 
             <View style={styles.actionsList}>
-              <TouchableOpacity style={styles.actionItem} onPress={handleExportData} activeOpacity={0.7}>
+              <View style={styles.actionItem}>
                 <View style={styles.actionInfo}>
                   <View style={[styles.actionIconWrap, { backgroundColor: '#E3F2FD' }]}>
                     <Ionicons name="download" size={18} color="#2196F3" />
                   </View>
                   <View style={styles.actionTextWrap}>
                     <Text style={styles.actionLabel}>Export Data</Text>
-                    <Text style={styles.actionDesc}>Download user, pet, or all data</Text>
+                    <Text style={styles.actionDesc}>Coming soon</Text>
                   </View>
                 </View>
-                <Ionicons name="chevron-forward" size={20} color={ADMIN_COLORS.textMuted} />
-              </TouchableOpacity>
+                <Text style={styles.settingDesc}>Soon</Text>
+              </View>
 
-              <TouchableOpacity style={styles.actionItem} onPress={handleClearCache} activeOpacity={0.7}>
+              <View style={styles.actionItem}>
                 <View style={styles.actionInfo}>
                   <View style={[styles.actionIconWrap, { backgroundColor: '#FFF3E0' }]}>
                     <Ionicons name="trash" size={18} color="#FF9800" />
                   </View>
                   <View style={styles.actionTextWrap}>
                     <Text style={styles.actionLabel}>Clear Cache</Text>
-                    <Text style={styles.actionDesc}>Clear all cached data</Text>
+                    <Text style={styles.actionDesc}>Coming soon</Text>
                   </View>
                 </View>
-                <Ionicons name="chevron-forward" size={20} color={ADMIN_COLORS.textMuted} />
-              </TouchableOpacity>
+                <Text style={styles.settingDesc}>Soon</Text>
+              </View>
             </View>
           </View>
 

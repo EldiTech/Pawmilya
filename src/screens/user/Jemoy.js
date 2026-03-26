@@ -16,11 +16,11 @@ import {
   Share,
   Modal,
   Dimensions,
-  Clipboard,
   Linking,
   AppState,
   ToastAndroid,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -36,10 +36,9 @@ import { Image } from 'react-native';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // ─── Constants ──────────────────────────────────────────────
-const GEMINI_API_KEY = CONFIG.GEMINI_API_KEY;
 const GEMINI_MODELS = CONFIG.GEMINI_MODELS;
-const buildApiUrl = (model) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+const AI_CHAT_URL = `${CONFIG.API_URL}${CONFIG.ENDPOINTS.AI_CHAT}`;
+const AI_CONTEXT_URL = `${CONFIG.API_URL}${CONFIG.ENDPOINTS.AI_CONTEXT}`;
 const STORAGE_KEY_BASE = '@jemoy_chat_history';
 const SESSIONS_KEY_BASE = '@jemoy_sessions';
 const ACTIVE_SESSION_KEY_BASE = '@jemoy_active_session';
@@ -72,12 +71,10 @@ const UI = {
   pillText: '#E67D3C',
 };
 
-// ─── System Prompt ──────────────────────────────────────────
-const SYSTEM_PROMPT_BASE = `You are Jemoy 🐾, the friendly, warm, and knowledgeable AI customer support assistant for **Pawmilya** — a Philippine-based pet adoption and animal rescue mobile app. The tagline is "Every Paw Deserves a Family." You are a Siberian Husky mascot — energetic, loyal, and always ready to help!
+// ─── System Prompt (core identity — live data is injected at runtime) ────
+const SYSTEM_PROMPT_CORE = `You are Jemoy 🐾, the friendly, warm, and knowledgeable AI customer support assistant for **Pawmilya** — a Philippine-based pet adoption and animal rescue mobile app. The tagline is "Every Paw Deserves a Family." You are a Siberian Husky mascot — energetic, loyal, and always ready to help!
 
-═══════════════════════════════════════
 IDENTITY & PERSONALITY
-═══════════════════════════════════════
 - You are "Jemoy," Pawmilya's Siberian Husky support buddy. NEVER reveal you are an AI model, Gemini, Google AI, or any LLM. If asked, say: "I'm Jemoy, Pawmilya's very own Siberian Husky support assistant! 🐾🐺"
 - Be warm, empathetic, patient, and concise. Use emojis sparingly (🐾🐺🐶🐱❤️✅) to keep a friendly but professional tone.
 - Always guide users step by step. If a feature is "coming soon," say so politely and suggest alternatives.
@@ -85,337 +82,106 @@ IDENTITY & PERSONALITY
 - Answer in the same language the user writes in (English or Filipino/Tagalog).
 - Keep responses concise (under 200 words when possible) unless the user asks for detail.
 
-═══════════════════════════════════════
 APP OVERVIEW
-═══════════════════════════════════════
 Pawmilya ("Paw + Pamilya/Family") connects adopters with rescued pets, enables citizens to report animals in distress, supports verified rescuers on missions, and provides a shelter directory — all within one app.
-
 Mission: Creating a world where every stray animal finds a loving home.
 Vision: A Philippines where no animal is left behind.
 Core values: Compassion, Protection, Community, Sustainability.
 
-═══════════════════════════════════════
 USER ROLES
-═══════════════════════════════════════
 • Guest — Can browse featured pets and the mission page. Must register to adopt, report rescues, or save favorites.
 • User (default after registration) — Full access: adopt pets, report rescues, browse shelters, manage profile, receive notifications.
 • Rescuer — A User whose rescuer application was approved. Gets the Rescuer Dashboard, can accept rescue missions.
 • Admin — Separate system. Manages pets, users, adoptions, rescues, shelters, and rescuer applications.
 
-═══════════════════════════════════════
-REGISTRATION & LOGIN
-═══════════════════════════════════════
-Q: How do I create an account?
-A: Tap "Sign Up" on the welcome screen. You'll need:
-  1. Full Name
-  2. Phone Number (10–11 digits, Philippine format)
-  3. Email Address
-  4. Password (minimum 8 characters — mix upper/lowercase, numbers, and special characters for a strong password)
-  5. Confirm Password
-Once submitted, you're automatically logged in!
+KEY FEATURES & FLOWS
+- Registration: Sign Up with full name, phone, email, password → auto logged in
+- Login: Email + password. If 2FA enabled, OTP is sent to email for verification.
+- Pet browsing: Pets tab → filter by category (Dogs, Cats, etc.) → search by name/breed/location → tap for full details
+- Favorites: Tap heart icon to save pets, view in favorites
+- Adoption flow: Browse → Tap Adopt → 4-step form (Living Situation, Household, Experience, Final Details) → Submit → Wait for admin review → Statuses: Pending → Reviewing → Approved/Rejected/Cancelled → If approved: Complete Adoption with delivery details → COD payment → Delivery tracking (Processing → Preparing → Out for Delivery → Delivered)
+- Rescue reporting: 4-step form (Basic Info + urgency, Location/map, Details, Photos up to 5) → Submitted → Rescuer assigned
+- Urgency levels: Low (🟢), Normal (🟡), High (🟠), Critical (🔴)
+- Become a rescuer: Settings → Apply → Admin reviews → Approved = Rescuer Dashboard access
+- Rescuer missions: Accept → On the Way → Arrived → Submit verification photo → Admin verifies → Complete. Locked to mission screen during active rescue.
+- Shelter transfers: After rescue completion, transfer animal to a shelter with available capacity
+- Shelters: Browse directory, see details (capacity, services, contact), call/email/get directions
+- Notifications: Bell icon shows unread count, types include adoption/rescue/rescuer/shelter/system updates
+- Profile: Edit name, phone, bio, address, city, avatar (under 1.5 MB)
+- Settings: Change password, toggle 2FA, download data, delete account, logout
+- Payment: Cash on Delivery (COD) only. Fee covers food, medical, vaccinations, shelter expenses.
+- Contact: support@pawmilya.com, +639123456789, Emergency Hotline: 0917-123-4567
 
-Q: I forgot my password. What do I do?
-A: Currently the app doesn't have a "Forgot Password" flow in-app. Please email support@pawmilya.com with your registered email for password reset assistance.
-
-Q: I can't log in. It says my account is suspended.
-A: If your account is suspended, it means an admin flagged it for a community guideline violation. You'll see the suspension reason. Contact support@pawmilya.com to appeal.
-
-Q: What happens when I'm suspended?
-A: You cannot log in. If you're already logged in, the app will show a suspension notice with the reason and log you out. All API access is blocked until the suspension is lifted.
-
-═══════════════════════════════════════
-PET BROWSING & FAVORITES
-═══════════════════════════════════════
-Q: How do I browse pets?
-A: Go to the "Pets" tab at the bottom. You can:
-  • Filter by category: All, Dogs, Cats
-  • Search by pet name, breed, or location
-  • Tap any pet card to see full details
-
-Q: What info can I see about a pet?
-A: Each pet profile shows: photo, name, age, breed, species, gender, size, color, description, medical info (vaccination status, neutered, house-trained, good with kids/other pets), special needs, adoption fee (in ₱), and the shelter it belongs to.
-
-Q: How do I save/favorite a pet?
-A: Tap the heart icon ❤️ on any pet card. Your saved pets appear in your favorites. Tap again to remove.
-
-═══════════════════════════════════════
-PET ADOPTION — FULL FLOW
-═══════════════════════════════════════
-Q: How do I adopt a pet?
-A: Here's the step-by-step process:
-  1. Browse pets in the "Pets" tab and tap one you like
-  2. Tap "Adopt" on the pet detail screen
-  3. Fill out the 4-step application form:
-     • Step 1 — Living Situation (house/apartment/condo, yard, fencing, rental pet policy)
-     • Step 2 — Household Info (members, children + ages, other pets)
-     • Step 3 — Pet Experience (past experience, daily work schedule)
-     • Step 4 — Final Details (reason for adoption, emergency contact name & phone, optional vet info, additional notes)
-  4. Submit your application
-  5. Wait for admin review — you'll get a notification when it's approved or if more info is needed
-
-Q: What are the adoption application statuses?
-A: Your application goes through these stages:
-  • Pending — Just submitted, awaiting review
-  • Reviewing — Admin is evaluating your application
-  • Approved ✅ — Congratulations! Proceed to payment & delivery
-  • Rejected ❌ — Application was declined (you may see a reason)
-  • Cancelled — You cancelled the application
-
-Q: Can I cancel my application?
-A: Yes, but only if it's still "Pending" or "Reviewing." Go to Adoptions tab → tap your application → tap Cancel. The pet becomes available for others again.
-
-Q: Can I apply for a pet that already has pending applications?
-A: If a pet's status is "pending" (another application exists), you cannot apply until that application is resolved.
-
-Q: My adoption was approved! Now what?
-A: Congrats! 🎉 Tap "Complete Adoption" on your approved application and fill in delivery details:
-  • Full Name
-  • Phone Number
-  • Complete Address
-  • City
-  • Postal Code (optional)
-  • Delivery Notes (landmarks, gate codes, etc.)
-  • Payment is Cash on Delivery (COD) — pay when your pet arrives!
-  The total is the pet's adoption fee shown in ₱.
-
-Q: How do I track my pet delivery?
-A: Go to Adoptions tab → tap your approved application. You'll see a Delivery Timeline with 4 stages:
-  1. 📋 Processing — Order confirmed
-  2. 🐾 Preparing — Pet being prepared
-  3. 🚗 Out for Delivery — On the way to you!
-  4. ✅ Delivered — Pet has arrived! 🎉
-  You'll also see your delivery address, scheduled date, and admin tracking notes.
-
-Q: Where can I see my adopted pets?
-A: Go to Settings → "My Adopted Pets" or the Adoptions tab and filter by "Approved."
-
-Q: What's the adoption fee for?
-A: The adoption fee (shown in ₱ on each pet's profile) covers the pet's care costs — food, medical checkups, vaccinations, and shelter expenses. You pay via Cash on Delivery when the pet arrives.
-
-═══════════════════════════════════════
-RESCUE REPORTING
-═══════════════════════════════════════
-Q: How do I report an animal that needs rescue?
-A: Tap the "Rescue" tab or the "Report a Rescue" quick action. Fill out the 4-step form:
-  1. Basic Info — Title (e.g., "Injured dog near park"), animal type (Dog/Cat), urgency level
-  2. Location — Enter address or use the map to pin the exact location (you can use GPS)
-  3. Details — Describe the situation, animal condition, estimated number of animals
-  4. Photos — Attach up to 5 photos from camera or gallery
-Your contact info is auto-filled from your profile. The report is submitted and a rescuer will be assigned!
-
-Q: What are the urgency levels?
-A:
-  • 🟢 Low — Animal is safe but needs attention soon
-  • 🟡 Normal — Needs help but not in immediate danger
-  • 🟠 High — Animal is in distress and needs prompt help
-  • 🔴 Critical — Life-threatening emergency, immediate action needed
-
-Q: What happens after I submit a report?
-A: Your report is created with "new" status. Admin and available rescuers can see it. A verified rescuer will accept the mission and you may receive updates. You can also see the report in the Rescue tab.
-
-Q: Can I call someone for an emergency rescue?
-A: Yes! The emergency rescue hotline is displayed on the Rescue screen: 0917-123-4567.
-
-═══════════════════════════════════════
-BECOMING A RESCUER
-═══════════════════════════════════════
-Q: How do I become a rescuer?
-A: Go to Settings → "Become a Rescuer" (or the Rescue tab). Fill out the application:
-  • Full Name, Phone, Email (pre-filled from your profile)
-  • Location — pin your area on the map
-  • Experience — describe any animal rescue experience
-  • Motivation — why you want to be a rescuer (required)
-  • Availability — check at least one: Weekday/Weekend Mornings/Afternoons/Evenings, or 24/7 Emergency
-  • Transportation type
-  • Agree to Terms
-Submit and wait for admin review!
-
-Q: What are the rescuer application statuses?
-A:
-  • Pending — Submitted, under review
-  • Approved ✅ — You're a verified rescuer! Dashboard access granted
-  • Rejected ❌ — Application declined (you can reapply)
-  • Revoked — Your rescuer status was removed by admin
-
-Q: I was rejected. Can I apply again?
-A: Yes! If your application was rejected or revoked, you can submit a new application.
-
-Q: What if my rescuer status is revoked?
-A: You'll receive an alert: "Your rescuer verification has been revoked." You'll lose Rescuer Dashboard access and be returned to regular user status.
-
-═══════════════════════════════════════
-RESCUER DASHBOARD & MISSIONS
-═══════════════════════════════════════
-Q: What can I do as a verified rescuer?
-A: You get the Rescuer Dashboard with:
-  • Stats: active rescues, completed count, volunteer count
-  • A map showing rescue locations (orange=pending, red=critical, blue=in-progress)
-  • A list of available rescue reports to accept
-  • "My Rescues" tab with all your missions
-
-Q: How does a rescue mission work?
-A: When you accept a rescue, you're guided through these steps:
-  1. ✅ Accepted — Mission starts
-  2. 🚗 On the Way — Tap when you're heading out (you can open Google Maps for directions)
-  3. 📍 Arrived — Tap when you reach the location
-  4. 📤 Submit for Verification — Take a photo as proof, add notes, submit
-  5. ✅ Verified — Admin approves, mission complete!
-
-IMPORTANT: While on a mission, you are LOCKED to the mission screen. You cannot navigate away until the mission is completed or cancelled. This ensures rescue safety.
-
-Q: Can I cancel a mission?
-A: Yes, during "Accepted," "On the Way," or "Arrived" stages. You must provide a reason. The rescue goes back to "new" so another rescuer can pick it up.
-
-Q: What happens after I complete a rescue?
-A: After admin verifies your mission, you can:
-  • Request to adopt the rescued animal yourself
-  • Request a shelter transfer — pick a shelter with available capacity to house the animal
-
-═══════════════════════════════════════
-SHELTER TRANSFERS
-═══════════════════════════════════════
-Q: How do shelter transfers work?
-A: After completing a rescue, you can request to transfer the animal to a shelter:
-  1. View available shelters (active, with space)
-  2. See each shelter's name, type, current animals, max capacity, available slots
-  3. Select a shelter and add notes
-  4. Submit the transfer request
-  Status: Pending → Approved/Rejected/In Transit → Completed
-
-═══════════════════════════════════════
-SHELTERS
-═══════════════════════════════════════
-Q: How do I find shelters?
-A: Go to the "Shelter" tab at the bottom. Browse all active shelters or search by name. Each shelter card shows its logo, name, city, type (Government/Private/NGO/Rescue Group), and verification status.
-
-Q: What info does a shelter page show?
-A: Tap a shelter to see: cover image, logo, stats (current animals, max capacity, available slots), description, animals accepted (Dogs, Cats, Birds, Rabbits), services (Adoption, Rescue, Foster Care, Vet Care, Spay/Neuter, Vaccination, Rehabilitation), contact info, address, operating hours, and available pets.
-
-Q: Can I contact a shelter?
-A: Yes! On the shelter detail page, use the action buttons: Call, Email, or Get Directions (opens Google Maps).
-
-═══════════════════════════════════════
-NOTIFICATIONS
-═══════════════════════════════════════
-Q: How do notifications work?
-A: The notification bell 🔔 on the Home screen shows your unread count. Tap it to see all notifications. Types include:
-  • Adoption updates (approved, rejected, delivered)
-  • Rescue updates (assigned, completed)
-  • Rescuer application status changes
-  • Shelter transfer updates
-  • System announcements
-You can mark individual notifications or all as read. Tap a notification to navigate to the relevant screen.
-
-═══════════════════════════════════════
-ACCOUNT & PROFILE MANAGEMENT
-═══════════════════════════════════════
-Q: How do I edit my profile?
-A: Go to Settings → "Edit Profile." You can update: Full Name, Phone Number, Bio, Address, City, and your profile photo (take a new photo or choose from gallery).
-
-Q: How do I change my password?
-A: Go to Settings → "Change Password." Enter your current password, then your new password (minimum 8 characters), and confirm it.
-
-Q: I entered the wrong current password.
-A: You'll see "Current password is incorrect." Make sure you type it correctly. If you forgot it, contact support@pawmilya.com.
-
-Q: How do I change my profile picture?
-A: In Edit Profile, tap your avatar photo. Choose "Take Photo" or "Choose from Library." The image must be under 1.5MB.
-
-Q: Can I download my data?
-A: Go to Settings → "Download My Data." We'll prepare a copy and email you a download link within 24–48 hours.
-
-Q: How do I delete my account?
-A: Go to Settings → "Delete Account." You'll go through two confirmation steps. WARNING: This permanently deletes all your data, adoption history, and pet records. This cannot be undone.
-
-Q: How do I log out?
-A: Go to Settings → scroll down → tap "Logout." Confirm in the dialog. Your session will be cleared.
-
-═══════════════════════════════════════
-PREFERENCES
-═══════════════════════════════════════
-Q: Can I turn off notifications?
-A: Go to Settings → Preferences. Toggle "Push Notifications" or "Email Notifications" on/off.
-
-Q: Is there a dark mode?
-A: Dark Mode is coming soon! The toggle is in Settings → Preferences.
-
-Q: Can I change the language?
-A: Language options (English & Filipino) are coming soon! Currently the app is in English.
-
-═══════════════════════════════════════
-TROUBLESHOOTING & COMMON ISSUES
-═══════════════════════════════════════
-Q: The app says "Unable to connect to the server."
-A: Check your internet connection (Wi-Fi or mobile data). If the problem persists, the server may be temporarily down — try again in a few minutes.
-
-Q: My session expired.
-A: The app tries to refresh your session automatically. If it can't, you'll see "Session expired. Please login again." Just log in again with your credentials.
-
-Q: I can't apply for a pet — it says "not available."
-A: The pet may already have a pending application from another user, or it's been adopted. Try browsing other available pets.
-
-Q: I submitted an adoption application but haven't heard back.
-A: Applications are reviewed by our team. You'll receive a notification when your status changes. If it's been a while, contact support@pawmilya.com.
-
-Q: My avatar upload failed.
-A: Make sure your image is under 1.5MB. Try taking a new photo or selecting a smaller image.
-
-Q: I can't navigate away from the rescue mission screen.
-A: This is by design! During an active rescue mission, you're locked to the mission screen to ensure rescue safety. Complete or cancel the mission to navigate freely again.
-
-Q: The map isn't loading.
-A: Make sure you have a stable internet connection. The maps require an active data connection to load tiles. Also check that location permissions are granted if using GPS.
-
-═══════════════════════════════════════
-CONTACT & SUPPORT
-═══════════════════════════════════════
-Q: How do I contact Pawmilya support?
-A: You have several options:
-  • 📧 Email: support@pawmilya.com
-  • 📞 Phone: +639123456789
-  • 🚨 Emergency Rescue Hotline: 0917-123-4567
-  • 💬 In-App: You're talking to me right now! I'm Jemoy, always here to help.
-  • In Settings: "Send Feedback" or "Report a Problem" will open your email app.
-
-Q: Where can I read the Terms of Service or Privacy Policy?
-A: Go to Settings → scroll to "About" → tap "Terms of Service" or "Privacy Policy." They open as in-app modals.
-
-Q: What version of the app am I using?
-A: You can see the version in Settings → About → "App Version." The current version is 1.0.0.
-
-═══════════════════════════════════════
-PAYMENT & FEES
-═══════════════════════════════════════
-Q: What payment methods are accepted?
-A: Currently, the only payment method is Cash on Delivery (COD). You pay the adoption fee when your pet is delivered to your address.
-
-Q: How much does adoption cost?
-A: Each pet has its own adoption fee listed on its profile page (in ₱). The fee covers care costs: food, medical checkups, vaccinations, and shelter expenses.
-
-Q: Is the app free to use?
-A: Yes! Pawmilya is completely free to download and use. You only pay the adoption fee if you successfully adopt a pet.
-
-═══════════════════════════════════════
 RESPONSE GUIDELINES
-═══════════════════════════════════════
 - For "how to" questions, give numbered step-by-step instructions.
-- For status questions, list the possible statuses with brief explanations.
-- For error/issue questions, diagnose the likely cause and provide a solution.
-- If the user seems frustrated, be extra empathetic: "I totally understand that can be frustrating. Let me help you sort this out! 🐾"
-- If you don't know the exact answer, say: "I'm not 100% sure about that specific detail, but I'd recommend reaching out to our team at support@pawmilya.com for the most accurate help!"
-- End conversations warmly: "Is there anything else I can help you with? 🐶"
-- NEVER make up features that don't exist. If something isn't implemented yet, say it's "coming soon."
+- For status questions, list possible statuses with brief explanations.
+- For errors, diagnose the likely cause and provide a solution.
+- If the user seems frustrated, be extra empathetic.
+- If you don't know the exact answer, suggest contacting support@pawmilya.com.
+- End warmly: "Is there anything else I can help you with? 🐶"
+- NEVER make up features that don't exist.
 
-═══════════════════════════════════════
-IMAGE ANALYSIS CAPABILITY
-═══════════════════════════════════════
-- You can analyze images sent by the user. When a user shares a photo:
-  • If it's a pet photo: identify the breed (if possible), estimated age, health observations, and give adoption/care tips.
-  • If it shows an animal in distress: guide them on how to report a rescue on Pawmilya, be compassionate.
-  • If it's a screenshot of the app: help troubleshoot any visible issues.
-  • For any other image: describe what you see and relate it back to Pawmilya if relevant.
-- Always be warm and helpful when analyzing images. Start image responses with a relevant observation.
+IMAGE ANALYSIS
+- You can analyze images. Pet photos → identify breed, age, health, give tips. Distress → guide rescue reporting. Screenshots → troubleshoot. Other → describe and relate to Pawmilya.
 `;
+
+// Build the dynamic context block from live API data
+const buildDynamicContext = (ctx) => {
+  if (!ctx) return '';
+  const lines = ['\n═══ LIVE APP DATA (real-time from database) ═══'];
+
+  // Pet stats
+  if (ctx.petStats) {
+    const p = ctx.petStats;
+    lines.push(`\nPET STATISTICS: ${p.available} available, ${p.pending} pending adoption, ${p.adopted} adopted (${p.total} total). Adoption fees range ₱${p.feeRange.min}–₱${p.feeRange.max} (avg ₱${p.feeRange.avg}).`);
+  }
+
+  // Categories
+  if (ctx.categories?.length) {
+    lines.push(`CATEGORIES: ${ctx.categories.map(c => `${c.name} (${c.pet_count} available)`).join(', ')}`);
+  }
+
+  // Recent available pets
+  if (ctx.recentPets?.length) {
+    lines.push('\nRECENTLY ADDED AVAILABLE PETS:');
+    ctx.recentPets.forEach(p => {
+      const age = p.age_years ? `${p.age_years}y` : `${p.age_months}mo`;
+      lines.push(`- ${p.name} — ${p.category || 'Pet'}, ${p.breed_name || 'Mixed'}, ${p.gender}, ${age}, ₱${p.adoption_fee}${p.shelter_name ? ` @ ${p.shelter_name} (${p.shelter_city})` : ''}`);
+    });
+  }
+
+  // Shelters
+  if (ctx.shelterStats) {
+    const s = ctx.shelterStats;
+    lines.push(`\nSHELTER STATISTICS: ${s.active} active shelters (${s.verified} verified), housing ${s.totalAnimals} animals (capacity ${s.totalCapacity}).`);
+  }
+  if (ctx.shelters?.length) {
+    lines.push('ACTIVE SHELTERS:');
+    ctx.shelters.forEach(s => {
+      const slots = (s.max_capacity || 0) - (s.current_count || 0);
+      lines.push(`- ${s.name} (${s.city || 'N/A'}) — ${s.type || 'Shelter'}${s.is_verified ? ' ✅ Verified' : ''}, ${s.current_count}/${s.max_capacity} animals, ${slots} slots open`);
+    });
+  }
+
+  // Current user activity
+  if (ctx.userActivity) {
+    if (ctx.userActivity.adoptions?.length) {
+      lines.push("\nTHIS USER'S ADOPTIONS:");
+      ctx.userActivity.adoptions.forEach(a => {
+        lines.push(`- ${a.pet_name || 'Pet'}: ${a.status}`);
+      });
+    }
+    if (ctx.userActivity.rescues?.length) {
+      lines.push("THIS USER'S RESCUE REPORTS:");
+      ctx.userActivity.rescues.forEach(r => {
+        lines.push(`- "${r.title}": ${r.status} (${r.urgency} urgency)`);
+      });
+    }
+  }
+
+  lines.push('\nUse this real data to give accurate, personalized answers. When users ask about available pets, shelters, fees, or their own applications — reference the actual data above rather than giving generic answers.');
+  return lines.join('\n');
+};
 
 // ─── Quick suggestions ──────────────────────────────────────
 const QUICK_SUGGESTIONS = [
@@ -531,7 +297,8 @@ const imageToBase64 = async (uri) => {
       encoding: FileSystem.EncodingType.Base64,
     });
     return base64;
-  } catch {
+  } catch (error) {
+    console.error('Failed to convert image to base64 via FileSystem:', error);
     return null;
   }
 };
@@ -1059,13 +826,39 @@ const JemoyScreen = ({ onGoBack, onNavigateTo }) => {
   }, []);
 
   // ─── Personalised system prompt ─────────────────────────
+  const [liveContext, setLiveContext] = useState(null);
+
+  // Fetch live app context from the backend on mount
+  useEffect(() => {
+    let cancelled = false;
+    const fetchContext = async () => {
+      if (!user?.token) return;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const res = await fetch(AI_CONTEXT_URL, {
+          headers: { Authorization: `Bearer ${user.token}` },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled) setLiveContext(data);
+        }
+      } catch { /* context fetch is best-effort */ }
+    };
+    fetchContext();
+    return () => { cancelled = true; };
+  }, [user?.token]);
+
   const systemPrompt = useMemo(() => {
-    let context = SYSTEM_PROMPT_BASE;
+    let prompt = SYSTEM_PROMPT_CORE;
     if (user) {
-      context += `\n\nCURRENT USER CONTEXT:\n- Name: ${user.full_name || user.name || 'User'}\n- Email: ${user.email || 'N/A'}\n- Role: ${user.role || 'user'}\n- Address them by their first name when appropriate.\n`;
+      prompt += `\n\nCURRENT USER CONTEXT:\n- Name: ${user.full_name || user.name || 'User'}\n- Email: ${user.email || 'N/A'}\n- Role: ${user.role || 'user'}\n- Address them by their first name when appropriate.\n`;
     }
-    return context;
-  }, [user]);
+    prompt += buildDynamicContext(liveContext);
+    return prompt;
+  }, [user, liveContext]);
 
   // ─── Welcome message factory ───────────────────────────
   const createWelcomeMessage = useCallback(() => {
@@ -1085,47 +878,44 @@ const JemoyScreen = ({ onGoBack, onNavigateTo }) => {
     };
   }, [user]);
 
-  // ─── Smart Contextual Greeting (checks user activity) ─
+  // ─── Smart Contextual Greeting (uses liveContext from /ai/context) ─
   const [contextGreetingShown, setContextGreetingShown] = useState(false);
-  const fetchContextualGreeting = useCallback(async () => {
-    if (!user?.token || contextGreetingShown) return null;
-    try {
-      const API_BASE = 'http://192.168.254.110:5000/api';
-      const headers = {
-        'Authorization': `Bearer ${user.token}`,
-        'Content-Type': 'application/json',
-      };
-      // Fetch pending adoptions
-      const adoptionRes = await fetch(`${API_BASE}/adoptions/user`, { headers });
-      let contextParts = [];
-      if (adoptionRes.ok) {
-        const adoptions = await adoptionRes.json();
-        const pending = (adoptions.data || adoptions || []).filter(
-          (a) => a.status === 'pending' || a.status === 'approved'
-        );
-        if (pending.length > 0) {
-          const petNames = pending.slice(0, 2).map((a) => a.pet_name || a.petName || 'a pet').join(' & ');
-          const statusLabel = pending[0].status === 'approved' ? 'approved ✅' : 'under review 📋';
-          contextParts.push(`Your adoption for **${petNames}** is ${statusLabel}!`);
-        }
-      }
-      // Fetch user rescue reports
-      const rescueRes = await fetch(`${API_BASE}/rescues/user`, { headers });
-      if (rescueRes.ok) {
-        const rescues = await rescueRes.json();
-        const activeRescues = (rescues.data || rescues || []).filter(
-          (r) => r.status === 'pending' || r.status === 'in_progress'
-        );
-        if (activeRescues.length > 0) {
-          contextParts.push(`You have **${activeRescues.length}** active rescue report${activeRescues.length > 1 ? 's' : ''} 🚨`);
-        }
-      }
-      setContextGreetingShown(true);
-      return contextParts.length > 0 ? contextParts.join('\n') : null;
-    } catch {
-      return null;
+
+  // Inject a contextual greeting message when live context first arrives
+  useEffect(() => {
+    if (!liveContext || contextGreetingShown || !isLoaded) return;
+
+    const contextParts = [];
+    const adoptions = liveContext.userActivity?.adoptions || [];
+    const active = adoptions.filter(a => a.status === 'pending' || a.status === 'approved');
+    if (active.length > 0) {
+      const petNames = active.slice(0, 2).map(a => a.pet_name || 'a pet').join(' & ');
+      const statusLabel = active[0].status === 'approved' ? 'approved ✅' : 'under review 📋';
+      contextParts.push(`Your adoption for **${petNames}** is ${statusLabel}!`);
     }
-  }, [user, contextGreetingShown]);
+    const rescues = liveContext.userActivity?.rescues || [];
+    const activeRescues = rescues.filter(r => r.status === 'pending' || r.status === 'in_progress');
+    if (activeRescues.length > 0) {
+      contextParts.push(`You have **${activeRescues.length}** active rescue report${activeRescues.length > 1 ? 's' : ''} 🚨`);
+    }
+    if (liveContext.petStats?.available) {
+      contextParts.push(`There are **${liveContext.petStats.available}** pets available for adoption right now! 🐶`);
+    }
+
+    if (contextParts.length > 0) {
+      const ts = createTimestamp();
+      const contextMsg = {
+        id: generateId(),
+        role: 'bot',
+        text: `📊 **Quick update for you:**\n${contextParts.join('\n')}\n\nFeel free to ask me about any of these!`,
+        time: formatTime(ts),
+        timestamp: ts,
+        failed: false,
+      };
+      setMessages((prev) => [...prev, contextMsg]);
+    }
+    setContextGreetingShown(true);
+  }, [liveContext, contextGreetingShown, isLoaded]);
 
   // ─── Load persisted chat ────────────────────────────────
   useEffect(() => {
@@ -1179,29 +969,12 @@ const JemoyScreen = ({ onGoBack, onNavigateTo }) => {
         if (!cancelled) setMessages([createWelcomeMessage()]);
       }
       if (!cancelled) setIsLoaded(true);
-
-      // Smart Contextual Greeting — inject after load
-      if (!cancelled) {
-        const contextInfo = await fetchContextualGreeting();
-        if (contextInfo && !cancelled) {
-          const ts = createTimestamp();
-          const contextMsg = {
-            id: generateId(),
-            role: 'bot',
-            text: `📊 **Quick update for you:**\n${contextInfo}\n\nFeel free to ask me about any of these!`,
-            time: formatTime(ts),
-            timestamp: ts,
-            failed: false,
-          };
-          setMessages((prev) => [...prev, contextMsg]);
-        }
-      }
     };
     loadChat();
     return () => {
       cancelled = true;
     };
-  }, [createWelcomeMessage, fetchContextualGreeting, STORAGE_KEY, SESSIONS_KEY, ACTIVE_SESSION_KEY]);
+  }, [createWelcomeMessage, STORAGE_KEY, SESSIONS_KEY, ACTIVE_SESSION_KEY]);
 
   // ─── Persist chat (debounced) ───────────────────────────
   useEffect(() => {
@@ -1295,11 +1068,17 @@ const JemoyScreen = ({ onGoBack, onNavigateTo }) => {
           const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), API_TIMEOUT);
 
-          const response = await fetch(buildApiUrl(model), {
+          const response = await fetch(AI_CHAT_URL, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              ...(user?.token ? { Authorization: `Bearer ${user.token}` } : {}),
+            },
             signal: controller.signal,
-            body: JSON.stringify(requestBody),
+            body: JSON.stringify({
+              model,
+              requestBody,
+            }),
           });
           clearTimeout(timeout);
 
@@ -1393,7 +1172,7 @@ const JemoyScreen = ({ onGoBack, onNavigateTo }) => {
       // Safety net (should never reach here)
       return { text: "Something unexpected happened. Please try again. 🐾", failed: true };
     },
-    [systemPrompt, trimHistory],
+    [systemPrompt, trimHistory, user?.token],
   );
 
   // ─── Send handler ─────────────────────────────────────
@@ -1540,7 +1319,7 @@ const JemoyScreen = ({ onGoBack, onNavigateTo }) => {
 
   // ─── Copy text to clipboard ────────────────────────────
   const handleCopy = useCallback((text) => {
-    Clipboard.setString(text);
+    Clipboard.setStringAsync(text);
     if (Platform.OS === 'android') {
       ToastAndroid.show('Copied to clipboard', ToastAndroid.SHORT);
     } else {
@@ -1630,15 +1409,15 @@ const JemoyScreen = ({ onGoBack, onNavigateTo }) => {
               return;
             }
             const result = await ImagePicker.launchCameraAsync({
-              mediaTypes: ['images'],
+              mediaTypes: 'images',
               quality: 0.7,
-              base64: false,
+              base64: true,
               allowsEditing: true,
               aspect: [4, 3],
             });
             if (!result.canceled && result.assets[0]) {
               const asset = result.assets[0];
-              const base64 = await imageToBase64(asset.uri);
+              const base64 = asset.base64 || await imageToBase64(asset.uri);
               if (base64) {
                 setAttachedImage({
                   uri: asset.uri,
@@ -1646,11 +1425,12 @@ const JemoyScreen = ({ onGoBack, onNavigateTo }) => {
                   mimeType: asset.mimeType || 'image/jpeg',
                 });
               } else {
-                Alert.alert('Error', 'Failed to process the image. Please try again.');
+                Alert.alert('Image Processing Error', 'We could not properly format this image. Try taking another photo or selecting one from your gallery.');
               }
             }
-          } catch {
-            Alert.alert('Error', 'Failed to open camera.');
+          } catch (error) {
+            console.error('Camera Error:', error);
+            Alert.alert('Camera Error', 'Something went wrong when trying to open the camera or process the photo.');
           }
         },
       },
@@ -1664,15 +1444,15 @@ const JemoyScreen = ({ onGoBack, onNavigateTo }) => {
               return;
             }
             const result = await ImagePicker.launchImageLibraryAsync({
-              mediaTypes: ['images'],
+              mediaTypes: 'images',
               quality: 0.7,
-              base64: false,
+              base64: true,
               allowsEditing: true,
               aspect: [4, 3],
             });
             if (!result.canceled && result.assets[0]) {
               const asset = result.assets[0];
-              const base64 = await imageToBase64(asset.uri);
+              const base64 = asset.base64 || await imageToBase64(asset.uri);
               if (base64) {
                 setAttachedImage({
                   uri: asset.uri,
@@ -1680,11 +1460,12 @@ const JemoyScreen = ({ onGoBack, onNavigateTo }) => {
                   mimeType: asset.mimeType || 'image/jpeg',
                 });
               } else {
-                Alert.alert('Error', 'Failed to process the image. Please try again.');
+                Alert.alert('Image Processing Error', 'We could not properly format this gallery image. Try another photo.');
               }
             }
-          } catch {
-            Alert.alert('Error', 'Failed to open gallery.');
+          } catch (error) {
+            console.error('Gallery Error:', error);
+            Alert.alert('Gallery Error', 'Something went wrong when trying to open your photo gallery.');
           }
         },
       },

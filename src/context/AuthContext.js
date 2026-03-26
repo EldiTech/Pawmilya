@@ -97,6 +97,16 @@ export const AuthProvider = ({ children }) => {
       setIsLoading(true);
       const response = await authService.login({ email, password });
       
+      // 2FA required — return tempToken and maskedEmail to caller
+      if (response.requires2FA) {
+        return {
+          success: true,
+          requires2FA: true,
+          tempToken: response.tempToken,
+          maskedEmail: response.maskedEmail,
+        };
+      }
+
       if (response.success) {
         const userData = {
           ...response.data.user,
@@ -124,6 +134,16 @@ export const AuthProvider = ({ children }) => {
       setIsLoading(true);
       const response = await authService.register(userData);
       
+      // 2FA required — return tempToken and maskedEmail to caller
+      if (response.requires2FA) {
+        return {
+          success: true,
+          requires2FA: true,
+          tempToken: response.tempToken,
+          maskedEmail: response.maskedEmail,
+        };
+      }
+
       if (response.success) {
         const userObj = {
           ...response.data.user,
@@ -143,6 +163,42 @@ export const AuthProvider = ({ children }) => {
       };
     } finally {
       setIsLoading(false);
+    }
+  }, []);
+
+  // Verify OTP (2FA)
+  const verifyOtp = useCallback(async (tempToken, otp) => {
+    try {
+      setIsLoading(true);
+      const response = await authService.verifyOtp(tempToken, otp);
+
+      if (response.success) {
+        const userData = {
+          ...response.user,
+          token: response.token,
+        };
+        setUser(userData);
+        setIsAuthenticated(true);
+        return { success: true, user: userData };
+      }
+
+      return { success: false, message: response.error || 'Verification failed' };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Verification failed',
+      };
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Resend OTP
+  const resendOtp = useCallback(async (tempToken) => {
+    try {
+      return await authService.resendOtp(tempToken);
+    } catch (error) {
+      throw error;
     }
   }, []);
 
@@ -174,13 +230,15 @@ export const AuthProvider = ({ children }) => {
     missionLoading,
     login,
     register,
+    verifyOtp,
+    resendOtp,
     logout,
     updateUser,
     checkAuthStatus,
     checkActiveMission,
     setMission,
     clearActiveMission,
-  }), [user, isLoading, isAuthenticated, activeMission, missionLoading, login, register, logout, updateUser, checkAuthStatus, checkActiveMission, setMission, clearActiveMission]);
+  }), [user, isLoading, isAuthenticated, activeMission, missionLoading, login, register, verifyOtp, resendOtp, logout, updateUser, checkAuthStatus, checkActiveMission, setMission, clearActiveMission]);
 
   return (
     <AuthContext.Provider value={value}>

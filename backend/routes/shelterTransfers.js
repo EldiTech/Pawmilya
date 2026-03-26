@@ -4,6 +4,105 @@ const { authenticateToken, authenticateAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
+const toTitleCase = (value) => {
+  if (!value) return 'Rescued Animal';
+  return String(value)
+    .trim()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+};
+
+const resolveCategoryId = async (client, animalType) => {
+  if (!animalType) return null;
+
+  const categoryResult = await client.query(
+    `SELECT id
+     FROM pet_categories
+     WHERE LOWER(name) = LOWER($1)
+        OR LOWER(name) = LOWER($2)
+     ORDER BY CASE WHEN LOWER(name) = LOWER($1) THEN 0 ELSE 1 END
+     LIMIT 1`,
+    [animalType, animalType.endsWith('s') ? animalType.slice(0, -1) : `${animalType}s`]
+  );
+
+  return categoryResult.rows[0]?.id || null;
+};
+
+const syncShelterCurrentCount = async (client, shelterId) => {
+  await client.query(
+    `UPDATE shelters s
+     SET current_count = (
+       SELECT COUNT(*)::INTEGER
+       FROM pets p
+       WHERE p.shelter_id = $1
+     ),
+     updated_at = CURRENT_TIMESTAMP
+     WHERE s.id = $1`,
+    [shelterId]
+  );
+};
+
+const createShelterIntakePet = async (client, transfer) => {
+  const categoryId = await resolveCategoryId(client, transfer.animal_type || '');
+  const petName = `${toTitleCase(transfer.animal_type || 'Rescued Animal')} #${transfer.rescue_report_id || transfer.id}`;
+  const shelterLocation = [transfer.shelter_address, transfer.shelter_city].filter(Boolean).join(', ');
+
+  const insertResult = await client.query(
+    `INSERT INTO pets (
+      name,
+      category_id,
+      breed_name,
+      gender,
+      description,
+      medical_history,
+      status,
+      shelter_id,
+      location,
+      images,
+      adoption_fee,
+      created_by,
+      updated_by,
+      created_at,
+      updated_at
+    ) VALUES (
+      $1,
+      $2,
+      $3,
+      $4,
+      $5,
+      $6,
+      'available',
+      $7,
+      $8,
+      $9,
+      0,
+      $10,
+      $11,
+      CURRENT_TIMESTAMP,
+      CURRENT_TIMESTAMP
+    )
+    RETURNING id`,
+    [
+      petName,
+      categoryId,
+      'Unknown Breed',
+      'Unknown',
+      transfer.animal_description || 'Rescued animal transferred to shelter care.',
+      transfer.animal_condition ? `Condition on intake: ${transfer.animal_condition}` : null,
+      transfer.shelter_id,
+      shelterLocation || transfer.shelter_name || 'Shelter',
+      transfer.images || null,
+      transfer.requester_id || null,
+      transfer.requester_id || null,
+    ]
+  );
+
+  return insertResult.rows[0]?.id || null;
+};
+
 // =====================================================
 // USER ROUTES - For rescuers requesting shelter transfers
 // =====================================================
@@ -128,7 +227,7 @@ router.post('/request', authenticateToken, async (req, res) => {
 
     // Verify the shelter exists and is active
     const shelterResult = await db.query(
-      `SELECT id, name, shelter_capacity, current_count FROM shelters 
+      `SELECT id, name, manager_id, shelter_capacity, current_count FROM shelters 
        WHERE id = $1 AND is_active = TRUE`,
       [shelter_id]
     );
@@ -149,7 +248,7 @@ router.post('/request', authenticateToken, async (req, res) => {
     // Check for existing pending request for this rescue
     const existingRequest = await db.query(
       `SELECT id FROM shelter_transfer_requests 
-       WHERE rescue_report_id = $1 AND status IN ('pending', 'approved')`,
+       WHERE rescue_report_id = $1 AND status IN ('pending', 'approved', 'accepted', 'in_transit', 'arrived_at_shelter')`,
       [rescue_report_id]
     );
 
@@ -187,14 +286,14 @@ router.post('/request', authenticateToken, async (req, res) => {
     );
     const requesterName = requesterResult.rows[0]?.full_name || 'A rescuer';
 
-    // Notify the shelter owner if they exist in users table
-    if (shelter.owner_id) {
+    // Notify the shelter manager if they exist in users table
+    if (shelter.manager_id) {
       try {
         await db.query(
           `INSERT INTO notifications (user_id, type, title, message, data)
            VALUES ($1, 'shelter_transfer', 'New Shelter Transfer Request', $2, $3)`,
           [
-            shelter.owner_id,
+            shelter.manager_id,
             `${requesterName} has requested to transfer a rescued ${rescue.animal_type || 'animal'} to ${shelter.name}`,
             JSON.stringify({
               transfer_request_id: transferRequest.id,
@@ -231,7 +330,7 @@ router.get('/my-requests', authenticateToken, async (req, res) => {
         s.address as shelter_address,
         s.phone as shelter_phone,
         rr.title as rescue_title,
-        rr.location as rescue_location
+        COALESCE(rr.location_description, 'Location not specified') as rescue_location
        FROM shelter_transfer_requests str
        LEFT JOIN shelters s ON str.shelter_id = s.id
        LEFT JOIN rescue_reports rr ON str.rescue_report_id = rr.id
@@ -244,6 +343,127 @@ router.get('/my-requests', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Get my transfer requests error:', error);
     res.status(500).json({ error: 'Failed to get transfer requests' });
+  }
+});
+
+// Update delivery progress for an approved transfer (rescuer)
+router.put('/:id/delivery-status', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, notes } = req.body;
+
+    const allowedStatuses = ['in_transit', 'arrived_at_shelter', 'completed'];
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        error: 'Invalid status. Allowed values: in_transit, arrived_at_shelter, completed'
+      });
+    }
+
+    const requestResult = await db.query(
+      `SELECT str.*, s.name as shelter_name, s.address as shelter_address, s.city as shelter_city
+       FROM shelter_transfer_requests str
+       LEFT JOIN shelters s ON str.shelter_id = s.id
+       WHERE str.id = $1 AND str.requester_id = $2`,
+      [id, req.user.id]
+    );
+
+    if (requestResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Transfer request not found' });
+    }
+
+    const transfer = requestResult.rows[0];
+    const currentStatus = transfer.status;
+
+    const transitionMap = {
+      approved: 'in_transit',
+      accepted: 'in_transit',
+      in_transit: 'arrived_at_shelter',
+      arrived_at_shelter: 'completed'
+    };
+
+    if (currentStatus === 'completed') {
+      return res.status(400).json({ error: 'Transfer is already completed' });
+    }
+
+    // Allow idempotent retry
+    if (currentStatus === status) {
+      return res.json({
+        success: true,
+        message: 'Delivery status already up to date',
+        transfer_request: transfer
+      });
+    }
+
+    const expectedNextStatus = transitionMap[currentStatus];
+    if (!expectedNextStatus || expectedNextStatus !== status) {
+      return res.status(400).json({
+        error: `Invalid transition from ${currentStatus} to ${status}`
+      });
+    }
+
+    const client = await db.pool.connect();
+    let updateResult;
+    try {
+      await client.query('BEGIN');
+
+      if (status === 'completed') {
+        updateResult = await client.query(
+          `UPDATE shelter_transfer_requests
+           SET status = 'completed',
+               completed_at = CURRENT_TIMESTAMP,
+               completion_notes = COALESCE($1, completion_notes),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2
+           RETURNING *`,
+          [notes || null, id]
+        );
+
+        const createdPetId = await createShelterIntakePet(client, transfer);
+
+        await syncShelterCurrentCount(client, transfer.shelter_id);
+
+        await client.query(
+          `INSERT INTO notifications (user_id, type, title, message, data)
+           VALUES ($1, 'shelter_transfer', 'Transfer Completed', $2, $3)`,
+          [
+            transfer.requester_id,
+            `Delivery confirmed. The rescued animal has been turned over to ${transfer.shelter_name || 'the shelter'}.`,
+            JSON.stringify({ transfer_request_id: id, status: 'completed', pet_id: createdPetId })
+          ]
+        );
+      } else {
+        updateResult = await client.query(
+          `UPDATE shelter_transfer_requests
+           SET status = $1,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2
+           RETURNING *`,
+          [status, id]
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (txError) {
+      await client.query('ROLLBACK');
+      throw txError;
+    } finally {
+      client.release();
+    }
+
+    const message = status === 'in_transit'
+      ? 'Delivery trip started. Navigate to the shelter and update your progress.'
+      : status === 'arrived_at_shelter'
+        ? 'Arrival recorded. Confirm handover when complete.'
+        : 'Transfer completed successfully.';
+
+    res.json({
+      success: true,
+      message,
+      transfer_request: updateResult.rows[0]
+    });
+  } catch (error) {
+    console.error('Update delivery status error:', error);
+    res.status(500).json({ error: 'Failed to update delivery status' });
   }
 });
 
@@ -505,7 +725,7 @@ router.put('/admin/:id/complete', authenticateAdmin, async (req, res) => {
 
     // Get the request first
     const requestResult = await db.query(
-      `SELECT str.*, s.name as shelter_name, s.id as shelter_id
+      `SELECT str.*, s.name as shelter_name, s.id as shelter_id, s.address as shelter_address, s.city as shelter_city
        FROM shelter_transfer_requests str
        LEFT JOIN shelters s ON str.shelter_id = s.id
        WHERE str.id = $1`,
@@ -518,44 +738,53 @@ router.put('/admin/:id/complete', authenticateAdmin, async (req, res) => {
 
     const request = requestResult.rows[0];
 
-    if (request.status !== 'approved') {
-      return res.status(400).json({ error: 'Only approved requests can be marked as completed' });
+    if (!['approved', 'accepted', 'in_transit', 'arrived_at_shelter'].includes(request.status)) {
+      return res.status(400).json({ error: 'Only approved or in-progress requests can be marked as completed' });
     }
 
-    // Update the request
-    const updateResult = await db.query(
-      `UPDATE shelter_transfer_requests 
-       SET status = 'completed', 
-           completed_at = CURRENT_TIMESTAMP,
-           completion_notes = $1,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2
-       RETURNING *`,
-      [completion_notes, id]
-    );
+    const client = await db.pool.connect();
+    let updateResult;
+    try {
+      await client.query('BEGIN');
 
-    // Update shelter's current count
-    await db.query(
-      `UPDATE shelters 
-       SET current_count = COALESCE(current_count, 0) + 1,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1`,
-      [request.shelter_id]
-    );
+      // Update the request
+      updateResult = await client.query(
+        `UPDATE shelter_transfer_requests 
+         SET status = 'completed', 
+             completed_at = CURRENT_TIMESTAMP,
+             completion_notes = $1,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2
+         RETURNING *`,
+        [completion_notes, id]
+      );
 
-    // Notify the requester
-    await db.query(
-      `INSERT INTO notifications (user_id, type, title, message, data)
-       VALUES ($1, 'shelter_transfer', 'Transfer Completed', $2, $3)`,
-      [
-        request.requester_id,
-        `The rescued animal has been successfully transferred to ${request.shelter_name}. Thank you for your rescue efforts!`,
-        JSON.stringify({
-          transfer_request_id: id,
-          status: 'completed'
-        })
-      ]
-    );
+      const createdPetId = await createShelterIntakePet(client, request);
+
+      await syncShelterCurrentCount(client, request.shelter_id);
+
+      // Notify the requester
+      await client.query(
+        `INSERT INTO notifications (user_id, type, title, message, data)
+         VALUES ($1, 'shelter_transfer', 'Transfer Completed', $2, $3)`,
+        [
+          request.requester_id,
+          `The rescued animal has been successfully transferred to ${request.shelter_name}. Thank you for your rescue efforts!`,
+          JSON.stringify({
+            transfer_request_id: id,
+            status: 'completed',
+            pet_id: createdPetId
+          })
+        ]
+      );
+
+      await client.query('COMMIT');
+    } catch (txError) {
+      await client.query('ROLLBACK');
+      throw txError;
+    } finally {
+      client.release();
+    }
 
     res.json({
       success: true,
@@ -589,19 +818,22 @@ router.delete('/admin/:id', authenticateAdmin, async (req, res) => {
 
     const request = requestResult.rows[0];
 
-    // If the transfer was completed, decrement the shelter count
-    if (request.status === 'completed' && request.shelter_id) {
+    // Delete the request
+    await db.query('DELETE FROM shelter_transfer_requests WHERE id = $1', [id]);
+
+    if (request.shelter_id) {
       await db.query(
-        `UPDATE shelters 
-         SET current_count = GREATEST(COALESCE(current_count, 0) - 1, 0),
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1`,
+        `UPDATE shelters s
+         SET current_count = (
+           SELECT COUNT(*)::INTEGER
+           FROM pets p
+           WHERE p.shelter_id = $1
+         ),
+         updated_at = CURRENT_TIMESTAMP
+         WHERE s.id = $1`,
         [request.shelter_id]
       );
     }
-
-    // Delete the request
-    await db.query('DELETE FROM shelter_transfer_requests WHERE id = $1', [id]);
 
     console.log(`Shelter transfer ${id} deleted by admin. Requester: ${request.requester_name}, Shelter: ${request.shelter_name}`);
 
@@ -631,7 +863,7 @@ router.get('/admin/:id', authenticateAdmin, async (req, res) => {
         s.operating_hours as shelter_hours,
         rr.title as rescue_title,
         rr.description as rescue_description,
-        rr.location as rescue_location,
+        COALESCE(rr.location_description, 'Location not specified') as rescue_location,
         rr.images as rescue_images,
         rr.animal_type as rescue_animal_type,
         rr.condition as rescue_condition,

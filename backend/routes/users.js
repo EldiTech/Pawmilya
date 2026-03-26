@@ -1,9 +1,12 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const db = require('../config/database');
 const { authenticateToken, authenticateTokenAllowSuspended, authenticateAdmin } = require('../middleware/auth');
 const { validate, schemas } = require('../middleware/validation');
 const { logger } = require('../config/logger');
+const tokenBlacklist = require('../config/tokenBlacklist');
 
 const router = express.Router();
 
@@ -55,7 +58,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
   try {
     const result = await db.query(
       `SELECT id, email, full_name, phone, avatar_url, address, city, state, 
-              date_of_birth, bio, status, role, created_at
+              date_of_birth, bio, status, role, two_factor_enabled, created_at
        FROM users WHERE id = $1`,
       [req.user.id]
     );
@@ -68,6 +71,76 @@ router.get('/profile', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ error: 'Failed to get profile' });
+  }
+});
+
+// Delete account (soft-delete/anonymize + revoke tokens)
+router.delete('/account', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const now = Date.now();
+    const anonymizedEmail = `deleted_${userId}_${now}@deleted.local`;
+    const randomPassword = crypto.randomBytes(32).toString('hex');
+    const passwordHash = await bcrypt.hash(randomPassword, 12);
+
+    await db.query(
+      `UPDATE users SET
+         email = $1,
+         password_hash = $2,
+         full_name = 'Deleted User',
+         phone = 'deleted_' || id,
+         avatar_url = NULL,
+         address = NULL,
+         city = NULL,
+         state = NULL,
+         date_of_birth = NULL,
+         bio = NULL,
+         role = 'user',
+         status = 'suspended',
+         two_factor_enabled = FALSE,
+         suspension_reason = 'Account deleted by user',
+         suspended_at = NOW(),
+         updated_at = NOW()
+       WHERE id = $3
+       RETURNING id`,
+      [anonymizedEmail, passwordHash, userId]
+    );
+
+    // Remove user-specific transient data (best effort).
+    try {
+      await db.query('DELETE FROM user_saved_pets WHERE user_id = $1', [userId]);
+    } catch (cleanupError) {
+      console.warn('Delete account cleanup user_saved_pets skipped:', cleanupError.message);
+    }
+
+    try {
+      await db.query('DELETE FROM notifications WHERE user_id = $1', [userId]);
+    } catch (cleanupError) {
+      console.warn('Delete account cleanup notifications skipped:', cleanupError.message);
+    }
+
+    if (req.token) {
+      try {
+        const decoded = jwt.verify(req.token, process.env.JWT_SECRET, { ignoreExpiration: true });
+        const expiresAt = decoded?.exp ? new Date(decoded.exp * 1000) : new Date(Date.now() + 4 * 60 * 60 * 1000);
+        await tokenBlacklist.add(req.token, userId, 'user', 'account_deleted', expiresAt);
+      } catch (error) {
+        // Continue deletion flow even if token decode fails.
+      }
+    }
+
+    await tokenBlacklist.blacklistAllForUser(userId, 'user', 'account_deleted');
+
+    res.json({
+      success: true,
+      message: 'Account deleted successfully',
+    });
+  } catch (error) {
+    console.error('Delete account error:', error);
+    res.status(500).json({
+      error: 'Failed to delete account',
+      details: process.env.NODE_ENV === 'production' ? undefined : error.message,
+    });
   }
 });
 
@@ -173,6 +246,30 @@ router.put('/change-password', authenticateToken, validate(schemas.changePasswor
   }
 });
 
+// Toggle 2FA
+router.put('/toggle-2fa', authenticateToken, async (req, res) => {
+  try {
+    const result = await db.query(
+      `UPDATE users SET two_factor_enabled = NOT two_factor_enabled, updated_at = NOW()
+       WHERE id = $1
+       RETURNING two_factor_enabled`,
+      [req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      message: result.rows[0].two_factor_enabled ? '2FA enabled' : '2FA disabled',
+      two_factor_enabled: result.rows[0].two_factor_enabled,
+    });
+  } catch (error) {
+    console.error('Toggle 2FA error:', error);
+    res.status(500).json({ error: 'Failed to toggle 2FA' });
+  }
+});
+
 // Get user's saved pets
 router.get('/favorites', authenticateToken, async (req, res) => {
   try {
@@ -254,7 +351,7 @@ router.get('/applications', authenticateToken, async (req, res) => {
 router.get('/notifications', authenticateToken, async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT id, type, title, message, is_read, created_at
+      `SELECT id, type, title, message, data, is_read, read_at, created_at
        FROM notifications
        WHERE user_id = $1
        ORDER BY created_at DESC`,
@@ -278,7 +375,7 @@ router.get('/notifications/unread-count', authenticateToken, async (req, res) =>
       [req.user.id]
     );
 
-    res.json({ count: parseInt(result.rows[0].count) });
+    res.json({ count: parseInt(result.rows[0].count, 10) });
   } catch (error) {
     console.error('Get unread count error:', error);
     res.status(500).json({ error: 'Failed to get unread count' });

@@ -5,8 +5,8 @@ require('dotenv').config();
 // ENVIRONMENT VALIDATION
 // ===========================================
 
-if (!process.env.DB_PASSWORD) {
-  console.error('❌ FATAL: DB_PASSWORD environment variable is required');
+if (!process.env.DATABASE_URL && !process.env.DB_PASSWORD) {
+  console.error('❌ FATAL: Set DATABASE_URL or DB_PASSWORD environment variable');
   process.exit(1);
 }
 
@@ -20,13 +20,27 @@ if (!process.env.JWT_SECRET) {
 // ===========================================
 
 const isProduction = process.env.NODE_ENV === 'production';
+const useConnectionString = Boolean(process.env.DATABASE_URL);
+const sslEnabled = process.env.DB_SSL === 'true' || isProduction || useConnectionString;
+const sslConfig = sslEnabled
+  ? { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false' }
+  : false;
 
-const poolConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT) || 5432,
-  database: process.env.DB_NAME || 'Pawmilya',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD,
+const poolConfig = useConnectionString
+  ? {
+      connectionString: process.env.DATABASE_URL,
+      ssl: sslConfig,
+    }
+  : {
+      host: process.env.DB_HOST || 'localhost',
+      port: parseInt(process.env.DB_PORT) || 5432,
+      database: process.env.DB_NAME || 'Pawmilya',
+      user: process.env.DB_USER || 'postgres',
+      password: process.env.DB_PASSWORD,
+      ssl: sslConfig,
+    };
+
+Object.assign(poolConfig, {
   
   // Connection Pool Settings
   max: parseInt(process.env.DB_POOL_MAX) || 20,                    // Maximum connections in pool
@@ -34,11 +48,7 @@ const poolConfig = {
   idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000, // Close idle connections after 30s
   connectionTimeoutMillis: parseInt(process.env.DB_CONNECT_TIMEOUT) || 5000, // Connection timeout 5s
   
-  // SSL Configuration for production
-  ssl: isProduction ? {
-    rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false',
-  } : false,
-};
+});
 
 const pool = new Pool(poolConfig);
 

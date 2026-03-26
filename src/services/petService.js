@@ -16,11 +16,14 @@ class PetService {
       if (filters.gender) params.gender = filters.gender;
       if (filters.size) params.size = filters.size;
       if (filters.location) params.location = filters.location;
-      if (filters.page) params.page = filters.page;
       if (filters.limit) params.limit = filters.limit;
       if (filters.sortBy) params.sortBy = filters.sortBy;
       if (filters.sortOrder) params.sortOrder = filters.sortOrder;
-      if (filters.offset) params.offset = filters.offset;
+      if (filters.offset !== undefined) {
+        params.offset = filters.offset;
+      } else if (filters.page && filters.limit) {
+        params.offset = (parseInt(filters.page, 10) - 1) * parseInt(filters.limit, 10);
+      }
 
       return await api.get(ENDPOINTS.PETS, params);
     } catch (error) {
@@ -81,7 +84,8 @@ class PetService {
   // Get pets by category (dogs, cats, etc.)
   async getPetsByCategory(category, page = 1, limit = 10) {
     try {
-      return await api.get(ENDPOINTS.PETS, { category, page, limit });
+      const offset = (page - 1) * limit;
+      return await api.get(ENDPOINTS.PETS, { category, limit, offset });
     } catch (error) {
       throw error;
     }

@@ -194,6 +194,13 @@ const WORKFLOW_STEPS = [
   { status: 'rescued', label: 'Verified', icon: 'shield-checkmark', color: '#10B981' },
 ];
 
+const DELIVERY_WORKFLOW_STEPS = [
+  { status: 'approved', label: 'Approved', icon: 'checkmark-circle', color: '#22C55E' },
+  { status: 'in_transit', label: 'In Transit', icon: 'car', color: '#3B82F6' },
+  { status: 'arrived_at_shelter', label: 'Arrived', icon: 'location', color: '#8B5CF6' },
+  { status: 'completed', label: 'Delivered', icon: 'home', color: '#10B981' },
+];
+
 const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMission }) => {
   const { user, activeMission } = useAuth();
   const [rescueReports, setRescueReports] = useState([]);
@@ -213,6 +220,7 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
   const [workflowModalVisible, setWorkflowModalVisible] = useState(false);
   const [workflowReport, setWorkflowReport] = useState(null);
   const [completionPhoto, setCompletionPhoto] = useState(null);
+  const [completionPhotoUrlInput, setCompletionPhotoUrlInput] = useState('');
   const [completionNotes, setCompletionNotes] = useState('');
   const [submittingWorkflow, setSubmittingWorkflow] = useState(false);
   
@@ -224,6 +232,10 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
   const [selectedShelter, setSelectedShelter] = useState(null);
   const [shelterTransferNotes, setShelterTransferNotes] = useState('');
   const [submittingTransfer, setSubmittingTransfer] = useState(false);
+  const [deliveryModalVisible, setDeliveryModalVisible] = useState(false);
+  const [deliveryReport, setDeliveryReport] = useState(null);
+  const [deliveryNotes, setDeliveryNotes] = useState('');
+  const [updatingDeliveryStatus, setUpdatingDeliveryStatus] = useState(false);
 
   useEffect(() => {
     // Check rescuer status first to ensure user is still verified
@@ -231,6 +243,11 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
     fetchUserProfile();
     fetchRescueReports();
     fetchMyRescues();
+  }, []);
+
+  const getAuthHeader = useCallback(async () => {
+    const token = await AsyncStorage.getItem(CONFIG.STORAGE_KEYS.AUTH_TOKEN);
+    return token ? { Authorization: `Bearer ${token}` } : {};
   }, []);
 
   // Check if user is still a verified rescuer on mount
@@ -388,6 +405,7 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
   const openWorkflowModal = useCallback((report) => {
     setWorkflowReport(report);
     setCompletionPhoto(null);
+    setCompletionPhotoUrlInput('');
     setCompletionNotes('');
     setWorkflowModalVisible(true);
   }, []);
@@ -424,7 +442,7 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user?.token}`
+          ...(await getAuthHeader())
         },
         body: JSON.stringify({ status: newStatus }),
       });
@@ -497,6 +515,42 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
     }
   }, []);
 
+  const addCompletionPhotoFromUrl = useCallback(() => {
+    const trimmedUrl = completionPhotoUrlInput.trim();
+
+    if (!trimmedUrl) {
+      Alert.alert('Validation Error', 'Please enter an image URL.');
+      return;
+    }
+
+    if (!/^https?:\/\//i.test(trimmedUrl)) {
+      Alert.alert('Invalid URL', 'Image URL must start with http:// or https://');
+      return;
+    }
+
+    setCompletionPhoto(trimmedUrl);
+    setCompletionPhotoUrlInput('');
+  }, [completionPhotoUrlInput]);
+
+  const getCompletionPhotoPayload = useCallback(async (photoValue) => {
+    if (!photoValue) return null;
+
+    if (photoValue.startsWith('data:image')) {
+      return photoValue;
+    }
+
+    if (photoValue.startsWith('http://') || photoValue.startsWith('https://')) {
+      return photoValue;
+    }
+
+    const base64 = await FileSystem.readAsStringAsync(photoValue, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    const extension = photoValue.split('.').pop()?.toLowerCase() || 'jpeg';
+    const mimeType = extension === 'png' ? 'image/png' : 'image/jpeg';
+    return `data:${mimeType};base64,${base64}`;
+  }, []);
+
   // Submit rescue for verification with photo proof
   const submitForVerification = async () => {
     if (!workflowReport) return;
@@ -508,22 +562,19 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
 
     setSubmittingWorkflow(true);
     try {
-      // Convert image to base64
-      const base64 = await FileSystem.readAsStringAsync(completionPhoto, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const extension = completionPhoto.split('.').pop()?.toLowerCase() || 'jpeg';
-      const mimeType = extension === 'png' ? 'image/png' : 'image/jpeg';
-      const base64Photo = `data:${mimeType};base64,${base64}`;
+      const photoPayload = await getCompletionPhotoPayload(completionPhoto);
+      if (!photoPayload) {
+        throw new Error('Missing completion photo payload');
+      }
 
       const uploadResponse = await fetch(`${CONFIG.API_URL}/rescue-reports/${workflowReport.id}/completion-photo`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${user?.token}`,
+          ...(await getAuthHeader()),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          photo: base64Photo,
+          photo: photoPayload,
           notes: completionNotes || '',
         }),
       });
@@ -546,12 +597,12 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
           method: 'PUT',
           headers: { 
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${user?.token}`
+            ...(await getAuthHeader())
           },
           body: JSON.stringify({ 
             status: 'pending_verification',
             notes: completionNotes,
-            completion_photo: base64Photo
+            completion_photo: photoPayload
           }),
         });
 
@@ -614,7 +665,7 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user?.token}`
+          ...(await getAuthHeader())
         },
         body: JSON.stringify({ 
           status: 'cannot_complete',
@@ -677,7 +728,7 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
         );
         
         // Refresh the rescued animals list
-        fetchRescuedAnimals();
+        fetchMyRescues();
       } else {
         Alert.alert('Error', result.error || 'Failed to submit adoption request. Please try again.');
       }
@@ -739,6 +790,7 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
                 setSelectedRescueForShelter(null);
                 setSelectedShelter(null);
                 setShelterTransferNotes('');
+                fetchMyRescues();
 
                 Alert.alert(
                   'Transfer Request Submitted! 🏛️',
@@ -784,6 +836,149 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
     return { text: 'Full', color: COLORS.danger };
   };
 
+  const hasActiveShelterTransfer = useCallback((report) => (
+    ['approved', 'accepted', 'in_transit', 'arrived_at_shelter'].includes(report?.shelter_transfer_status)
+  ), []);
+
+  const hasCompletedShelterTransfer = useCallback((report) => (
+    report?.shelter_transfer_status === 'completed'
+  ), []);
+
+  const getTransferStatusLabel = useCallback((status) => {
+    switch (status) {
+      case 'approved':
+      case 'accepted':
+        return 'Ready for Delivery';
+      case 'in_transit':
+        return 'In Transit to Shelter';
+      case 'arrived_at_shelter':
+        return 'Arrived at Shelter';
+      case 'completed':
+        return 'Delivered to Shelter';
+      default:
+        return 'Transfer Pending';
+    }
+  }, []);
+
+  const getDeliveryStepIndex = useCallback((status) => {
+    const statusMap = {
+      approved: 0,
+      accepted: 0,
+      in_transit: 1,
+      arrived_at_shelter: 2,
+      completed: 3,
+    };
+    return statusMap[status] ?? 0;
+  }, []);
+
+  const openDeliveryModal = useCallback((report) => {
+    setDeliveryReport(report);
+    setDeliveryNotes('');
+    setDeliveryModalVisible(true);
+  }, []);
+
+  const openShelterNavigation = useCallback((report) => {
+    const hasCoordinates = report?.transferred_shelter_latitude && report?.transferred_shelter_longitude;
+
+    let mapsUrl = '';
+    if (hasCoordinates) {
+      mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${report.transferred_shelter_latitude},${report.transferred_shelter_longitude}`;
+    } else {
+      const addressText = [
+        report?.transferred_shelter_address,
+        report?.transferred_shelter_city,
+        report?.transferred_shelter_name,
+      ].filter(Boolean).join(', ');
+
+      if (!addressText) {
+        Alert.alert('Shelter Address Missing', 'This shelter has no location details yet. Please contact the shelter first.');
+        return;
+      }
+
+      mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(addressText)}`;
+    }
+
+    Linking.openURL(mapsUrl);
+  }, []);
+
+  const resolveTransferRequestId = useCallback(async (report) => {
+    if (report?.shelter_transfer_request_id) {
+      return report.shelter_transfer_request_id;
+    }
+
+    try {
+      const transferResponse = await shelterService.getMyTransferRequests();
+      const transfers = transferResponse?.data || transferResponse || [];
+      const transferList = Array.isArray(transfers) ? transfers : [];
+
+      const activeTransfer = transferList.find(
+        (item) =>
+          Number(item?.rescue_report_id) === Number(report?.id) &&
+          ['approved', 'accepted', 'in_transit', 'arrived_at_shelter', 'completed'].includes(item?.status)
+      );
+
+      if (!activeTransfer?.id) {
+        return null;
+      }
+
+      const resolvedId = activeTransfer.id;
+      setDeliveryReport(prev => {
+        if (!prev || Number(prev.id) !== Number(report?.id)) {
+          return prev;
+        }
+        return {
+          ...prev,
+          shelter_transfer_request_id: resolvedId,
+          shelter_transfer_status: activeTransfer.status || prev.shelter_transfer_status,
+          transferred_shelter_name: activeTransfer.shelter_name || prev.transferred_shelter_name,
+          transferred_shelter_address: activeTransfer.shelter_address || prev.transferred_shelter_address,
+        };
+      });
+
+      return resolvedId;
+    } catch (error) {
+      console.error('Resolve transfer request id error:', error);
+      return null;
+    }
+  }, []);
+
+  const updateTransferDeliveryStatus = async (report, newStatus, notes = '') => {
+    const requestId = await resolveTransferRequestId(report);
+
+    if (!requestId) {
+      Alert.alert('Transfer Not Found', 'Unable to locate this transfer request. Please refresh and try again.');
+      return;
+    }
+
+    setUpdatingDeliveryStatus(true);
+    try {
+      const response = await shelterService.updateTransferDeliveryStatus(
+        requestId,
+        newStatus,
+        notes
+      );
+
+      const transferData = response?.data?.transfer_request || response?.transfer_request;
+      const statusFromServer = transferData?.status || newStatus;
+
+      setDeliveryReport(prev => ({ ...prev, shelter_transfer_status: statusFromServer }));
+      await fetchMyRescues();
+
+      const successMessage = response?.data?.message || response?.message || 'Delivery status updated.';
+      Alert.alert('Delivery Updated', successMessage);
+
+      if (statusFromServer === 'completed') {
+        setDeliveryModalVisible(false);
+        setDeliveryNotes('');
+      }
+    } catch (error) {
+      console.error('Update delivery status error:', error);
+      Alert.alert('Error', error?.message || 'Failed to update delivery status. Please try again.');
+    } finally {
+      setUpdatingDeliveryStatus(false);
+    }
+  };
+
   // ========== END RESCUED ANIMAL ACTIONS ==========
 
   // Accept rescue - proceed to confirmation
@@ -803,10 +998,9 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user?.token}`
+          ...(await getAuthHeader())
         },
         body: JSON.stringify({ 
-          rescuer_id: user?.id,
           action: 'accept'
         }),
       });
@@ -929,10 +1123,9 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user?.token}`
+          ...(await getAuthHeader())
         },
         body: JSON.stringify({ 
-          rescuer_id: user?.id,
           action: 'decline',
           decline_reason: reason
         }),
@@ -994,7 +1187,7 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user?.token}`
+          ...(await getAuthHeader())
         },
         body: JSON.stringify({ 
           status,
@@ -1024,7 +1217,7 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
     try {
       const response = await fetch(`${CONFIG.API_URL}/rescue-reports/rescuer/my-rescues`, {
         headers: {
-          'Authorization': `Bearer ${user?.token}`
+          ...(await getAuthHeader())
         }
       });
       const data = await response.json();
@@ -1520,7 +1713,7 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
                       <Text style={styles.rejectedAdoptionText}>Adoption Rejected</Text>
                     </View>
                     {/* Show Shelter option after rejection */}
-                    {report.shelter_transfer_status !== 'approved' && report.shelter_transfer_status !== 'completed' && (
+                    {!hasActiveShelterTransfer(report) && !hasCompletedShelterTransfer(report) && (
                       <TouchableOpacity
                         style={styles.shelterActionBtn}
                         activeOpacity={0.8}
@@ -1531,14 +1724,23 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
                       </TouchableOpacity>
                     )}
                   </>
-                ) : report.shelter_transfer_status === 'approved' || report.shelter_transfer_status === 'completed' ? (
-                  <View style={styles.transferredBadge}>
+                ) : hasActiveShelterTransfer(report) || hasCompletedShelterTransfer(report) ? (
+                  <TouchableOpacity
+                    style={styles.transferredBadge}
+                    activeOpacity={0.8}
+                    onPress={() => openDeliveryModal(report)}
+                    disabled={hasCompletedShelterTransfer(report)}
+                  >
                     <MaterialCommunityIcons name="home-city" size={14} color="#6366F1" />
                     <Text style={styles.transferredBadgeText}>
-                      {report.shelter_transfer_status === 'completed' ? 'At ' : 'Transferring to '}
-                      {report.transferred_shelter_name || 'Shelter'}
+                      {hasCompletedShelterTransfer(report)
+                        ? `Delivered to ${report.transferred_shelter_name || 'Shelter'}`
+                        : getTransferStatusLabel(report.shelter_transfer_status)}
                     </Text>
-                  </View>
+                    {!hasCompletedShelterTransfer(report) && (
+                      <Ionicons name="navigate" size={14} color="#6366F1" />
+                    )}
+                  </TouchableOpacity>
                 ) : (
                   <>
                     <TouchableOpacity
@@ -2132,6 +2334,22 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
                             </TouchableOpacity>
                           </View>
                         )}
+                        {!completionPhoto && (
+                          <View style={styles.photoUrlRow}>
+                            <TextInput
+                              style={styles.photoUrlInput}
+                              placeholder="Paste image URL (https://...)"
+                              placeholderTextColor={COLORS.textMedium}
+                              value={completionPhotoUrlInput}
+                              onChangeText={setCompletionPhotoUrlInput}
+                              autoCapitalize="none"
+                              keyboardType="url"
+                            />
+                            <TouchableOpacity style={styles.addPhotoUrlBtn} onPress={addCompletionPhotoFromUrl}>
+                              <Ionicons name="link" size={20} color={COLORS.textWhite} />
+                            </TouchableOpacity>
+                          </View>
+                        )}
                       </View>
 
                       {/* Optional Notes */}
@@ -2229,6 +2447,181 @@ const UserRescuerDashboardScreen = ({ onGoBack, onCheckRescuerStatus, onStartMis
                       <Ionicons name="navigate" size={18} color={COLORS.primary} />
                       <Text style={styles.navigateWorkflowText}>Open in Maps</Text>
                     </TouchableOpacity>
+                  )}
+                </View>
+
+                <View style={{ height: 30 }} />
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Shelter Delivery Workflow Modal */}
+      <Modal
+        visible={deliveryModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setDeliveryModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.deliveryModalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Shelter Delivery Trip</Text>
+              <TouchableOpacity onPress={() => setDeliveryModalVisible(false)}>
+                <Ionicons name="close" size={24} color={COLORS.textDark} />
+              </TouchableOpacity>
+            </View>
+
+            {deliveryReport && (
+              <ScrollView style={styles.workflowScroll} showsVerticalScrollIndicator={false}>
+                <View style={styles.workflowSummary}>
+                  <Text style={styles.workflowReportTitle}>
+                    {deliveryReport.title || `Rescue #${deliveryReport.id}`}
+                  </Text>
+                  <View style={styles.workflowLocation}>
+                    <Ionicons name="home" size={16} color={COLORS.textMedium} />
+                    <Text style={styles.workflowLocationText} numberOfLines={2}>
+                      {deliveryReport.transferred_shelter_name || 'Assigned Shelter'}
+                    </Text>
+                  </View>
+                  {(deliveryReport.transferred_shelter_address || deliveryReport.transferred_shelter_city) && (
+                    <View style={[styles.workflowLocation, { marginTop: SPACING.xs }]}>
+                      <Ionicons name="location" size={16} color={COLORS.textMedium} />
+                      <Text style={styles.workflowLocationText} numberOfLines={2}>
+                        {[deliveryReport.transferred_shelter_address, deliveryReport.transferred_shelter_city].filter(Boolean).join(', ')}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                <View style={styles.workflowSteps}>
+                  <Text style={styles.workflowStepsTitle}>Delivery Progress</Text>
+                  {DELIVERY_WORKFLOW_STEPS.map((step, index) => {
+                    const currentIndex = getDeliveryStepIndex(deliveryReport.shelter_transfer_status);
+                    const isCompleted = index < currentIndex;
+                    const isCurrent = index === currentIndex;
+                    const isPending = index > currentIndex;
+
+                    return (
+                      <View key={step.status} style={styles.workflowStepRow}>
+                        {index < DELIVERY_WORKFLOW_STEPS.length - 1 && (
+                          <View style={[
+                            styles.stepLine,
+                            isCompleted ? styles.stepLineCompleted : styles.stepLinePending
+                          ]} />
+                        )}
+
+                        <View style={[
+                          styles.stepCircle,
+                          isCompleted && { backgroundColor: '#10B981' },
+                          isCurrent && { backgroundColor: step.color, borderWidth: 3, borderColor: step.color + '40' },
+                          isPending && styles.stepCirclePending
+                        ]}>
+                          {isCompleted ? (
+                            <Ionicons name="checkmark" size={16} color="#FFF" />
+                          ) : (
+                            <Ionicons name={step.icon} size={16} color={isCurrent ? '#FFF' : COLORS.textMedium} />
+                          )}
+                        </View>
+
+                        <View style={styles.stepContent}>
+                          <Text style={[
+                            styles.stepLabel,
+                            isCompleted && styles.stepLabelCompleted,
+                            isCurrent && styles.stepLabelCurrent,
+                            isPending && styles.stepLabelPending
+                          ]}>
+                            {step.label}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                <View style={styles.workflowActions}>
+                  {deliveryReport.shelter_transfer_status !== 'completed' && (
+                    <TouchableOpacity
+                      style={styles.navigateWorkflowBtn}
+                      onPress={() => openShelterNavigation(deliveryReport)}
+                    >
+                      <Ionicons name="navigate" size={18} color={COLORS.primary} />
+                      <Text style={styles.navigateWorkflowText}>Navigate to Shelter</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {(deliveryReport.shelter_transfer_status === 'approved' || deliveryReport.shelter_transfer_status === 'accepted') && (
+                    <TouchableOpacity
+                      style={[styles.workflowActionBtn, styles.onTheWayBtn, { marginTop: SPACING.md }]}
+                      onPress={() => updateTransferDeliveryStatus(deliveryReport, 'in_transit')}
+                      disabled={updatingDeliveryStatus}
+                    >
+                      {updatingDeliveryStatus ? (
+                        <ActivityIndicator color="#FFF" size="small" />
+                      ) : (
+                        <>
+                          <Ionicons name="car" size={20} color="#FFF" />
+                          <Text style={styles.workflowActionText}>Start Delivery Trip</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  )}
+
+                  {deliveryReport.shelter_transfer_status === 'in_transit' && (
+                    <TouchableOpacity
+                      style={[styles.workflowActionBtn, styles.arrivedWorkflowBtn, { marginTop: SPACING.md }]}
+                      onPress={() => updateTransferDeliveryStatus(deliveryReport, 'arrived_at_shelter')}
+                      disabled={updatingDeliveryStatus}
+                    >
+                      {updatingDeliveryStatus ? (
+                        <ActivityIndicator color="#FFF" size="small" />
+                      ) : (
+                        <>
+                          <Ionicons name="location" size={20} color="#FFF" />
+                          <Text style={styles.workflowActionText}>Mark as Arrived</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  )}
+
+                  {deliveryReport.shelter_transfer_status === 'arrived_at_shelter' && (
+                    <>
+                      <TextInput
+                        style={styles.completionNotesInput}
+                        placeholder="Optional handover notes for this delivery..."
+                        placeholderTextColor={COLORS.textMedium}
+                        multiline
+                        numberOfLines={3}
+                        textAlignVertical="top"
+                        value={deliveryNotes}
+                        onChangeText={setDeliveryNotes}
+                      />
+                      <TouchableOpacity
+                        style={[styles.workflowActionBtn, styles.submitVerificationBtn]}
+                        onPress={() => updateTransferDeliveryStatus(deliveryReport, 'completed', deliveryNotes)}
+                        disabled={updatingDeliveryStatus}
+                      >
+                        {updatingDeliveryStatus ? (
+                          <ActivityIndicator color="#FFF" size="small" />
+                        ) : (
+                          <>
+                            <Ionicons name="checkmark-circle" size={20} color="#FFF" />
+                            <Text style={styles.workflowActionText}>Confirm Delivery</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </>
+                  )}
+
+                  {deliveryReport.shelter_transfer_status === 'completed' && (
+                    <View style={styles.rescuedBox}>
+                      <MaterialCommunityIcons name="home-heart" size={48} color="#10B981" />
+                      <Text style={styles.rescuedTitle}>Delivery Completed</Text>
+                      <Text style={styles.rescuedText}>
+                        The rescued animal has been safely turned over to the shelter.
+                      </Text>
+                    </View>
                   )}
                 </View>
 
@@ -3551,6 +3944,13 @@ const styles = StyleSheet.create({
     maxHeight: '95%',
     minHeight: '70%',
   },
+  deliveryModalContent: {
+    backgroundColor: COLORS.backgroundWhite,
+    borderTopLeftRadius: RADIUS.xl,
+    borderTopRightRadius: RADIUS.xl,
+    maxHeight: '95%',
+    minHeight: '65%',
+  },
   workflowScroll: {
     flex: 1,
     padding: SPACING.xl,
@@ -3727,6 +4127,31 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
     marginTop: SPACING.sm,
     fontWeight: FONTS.weights.medium,
+  },
+  photoUrlRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: SPACING.md,
+  },
+  photoUrlInput: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.borderLight,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm + 2,
+    color: COLORS.textDark,
+    fontSize: FONTS.sizes.sm,
+    marginRight: SPACING.sm,
+  },
+  addPhotoUrlBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: RADIUS.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primary,
   },
   completionNotesInput: {
     backgroundColor: COLORS.background,

@@ -2,13 +2,14 @@ import React, { useReducer, useCallback, useMemo, memo, useState, useEffect } fr
 import { View, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SplashScreen from 'expo-splash-screen';
-import { AuthProvider } from './src/context/AuthContext';
+import { AuthProvider, useAuth } from './src/context/AuthContext';
 import HomeScreen from './src/screens/guest/HomeScreen';
 import PetsScreen from './src/screens/guest/PetsScreen';
 import RescueScreen from './src/screens/guest/RescueScreen';
 import MissionScreen from './src/screens/guest/MissionScreen';
 import LoginScreen from './src/screens/guest/LoginScreen';
 import SignUpScreen from './src/screens/guest/SignUpScreen';
+import TwoFactorScreen from './src/screens/guest/TwoFactorScreen';
 import { UserMainScreen } from './src/screens/user';
 import BottomTabBar from './src/components/BottomTabBar';
 import OnboardingScreen from './src/screens/OnboardingScreen';
@@ -38,6 +39,7 @@ const initialState = {
   isAdmin: false,
   adminScreen: 'dashboard',
   adminToken: null,
+  twoFA: null, // { tempToken, maskedEmail }
 };
 
 function appReducer(state, action) {
@@ -45,17 +47,21 @@ function appReducer(state, action) {
     case 'ADMIN_LOGIN':
       return { ...state, adminToken: action.token, isAdmin: true, adminScreen: 'dashboard' };
     case 'USER_LOGIN':
-      return { ...state, isLoggedIn: true, activeTab: 'home' };
+      return { ...state, isLoggedIn: true, activeTab: 'home', authScreen: 'login', twoFA: null };
     case 'ADMIN_LOGOUT':
       return { ...state, isAdmin: false, adminToken: null, adminScreen: 'dashboard', activeTab: 'home' };
     case 'USER_LOGOUT':
-      return { ...state, isLoggedIn: false, activeTab: 'home' };
+      return { ...state, isLoggedIn: false, activeTab: 'home', authScreen: 'login', twoFA: null };
     case 'SET_ADMIN_SCREEN':
       return { ...state, adminScreen: action.screen };
     case 'SET_TAB':
-      return { ...state, activeTab: action.tab, authScreen: action.tab !== 'login' ? 'login' : state.authScreen };
+      return { ...state, activeTab: action.tab, authScreen: 'login', twoFA: null };
     case 'SET_AUTH_SCREEN':
       return { ...state, authScreen: action.screen };
+    case 'REQUIRE_2FA':
+      return { ...state, authScreen: '2fa', twoFA: action.payload };
+    case 'CANCEL_2FA':
+      return { ...state, authScreen: 'login', twoFA: null };
     default:
       return state;
   }
@@ -66,11 +72,31 @@ const ONBOARDING_KEY = '@pawmilya_onboarding_complete';
 // Keep splash screen visible while we check onboarding state
 SplashScreen.preventAutoHideAsync();
 
+// Wrapper for TwoFactorScreen that connects to AuthContext
+const TwoFactorScreenWrapper = memo(function TwoFactorScreenWrapper({ tempToken, maskedEmail, onVerifySuccess, onGoBack }) {
+  const { verifyOtp, resendOtp } = useAuth();
+
+  const handleVerifySuccess = useCallback((result) => {
+    onVerifySuccess && onVerifySuccess(result);
+  }, [onVerifySuccess]);
+
+  return (
+    <TwoFactorScreen
+      tempToken={tempToken}
+      maskedEmail={maskedEmail}
+      onVerifySuccess={handleVerifySuccess}
+      onGoBack={onGoBack}
+      verifyOtp={verifyOtp}
+      resendOtp={resendOtp}
+    />
+  );
+});
+
 const AppContent = memo(function AppContent() {
   const [state, dispatch] = useReducer(appReducer, initialState);
   const [showOnboarding, setShowOnboarding] = useState(null); // null = loading
   const [showSplash, setShowSplash] = useState(true);
-  const { activeTab, authScreen, isLoggedIn, isAdmin, adminScreen, adminToken } = state;
+  const { activeTab, authScreen, isLoggedIn, isAdmin, adminScreen, adminToken, twoFA } = state;
 
   // Check if onboarding was already completed
   useEffect(() => {
@@ -174,6 +200,18 @@ const AppContent = memo(function AppContent() {
     dispatch({ type: 'SET_TAB', tab: 'home' });
   }, []);
 
+  const handleRequire2FA = useCallback((payload) => {
+    dispatch({ type: 'REQUIRE_2FA', payload });
+  }, []);
+
+  const handleCancel2FA = useCallback(() => {
+    dispatch({ type: 'CANCEL_2FA' });
+  }, []);
+
+  const handle2FASuccess = useCallback(() => {
+    dispatch({ type: 'USER_LOGIN' });
+  }, []);
+
   const handleNavigateToRescue = useCallback(() => {
     dispatch({ type: 'SET_TAB', tab: 'rescue' });
   }, []);
@@ -230,17 +268,28 @@ const AppContent = memo(function AppContent() {
       case 'home':
         return <HomeScreen onNavigateToRescue={handleNavigateToRescue} />;
       case 'pets':
-        return <PetsScreen />;
+        return <PetsScreen onNavigateToLogin={handleNavigateToLogin} />;
       case 'rescue':
-        return <RescueScreen />;
+        return <RescueScreen onNavigateToLogin={handleNavigateToLogin} />;
       case 'mission':
         return <MissionScreen />;
       case 'login':
+        if (authScreen === '2fa' && twoFA) {
+          return (
+            <TwoFactorScreenWrapper
+              tempToken={twoFA.tempToken}
+              maskedEmail={twoFA.maskedEmail}
+              onVerifySuccess={handle2FASuccess}
+              onGoBack={handleCancel2FA}
+            />
+          );
+        }
         if (authScreen === 'signup') {
           return (
             <SignUpScreen 
               onNavigateToLogin={handleNavigateToLogin}
               onSignUpSuccess={handleSignUpSuccess}
+              onRequire2FA={handleRequire2FA}
             />
           );
         }
@@ -250,6 +299,7 @@ const AppContent = memo(function AppContent() {
             onGoBack={handleGoBackFromLogin}
             onLoginSuccess={handleUserLogin}
             onAdminLogin={handleAdminLogin}
+            onRequire2FA={handleRequire2FA}
           />
         );
       default:

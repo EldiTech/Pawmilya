@@ -67,7 +67,7 @@ Pawmilya/
 
 ```bash
 git clone <repository-url>
-cd Pawmilya
+cd Pawmilya/Pawmilya
 ```
 
 ### 2. Install frontend dependencies
@@ -122,14 +122,36 @@ cd backend
 npm run dev
 ```
 
-### 6. Start the Expo app
+### 6. Configure frontend API URL
+
+Create a `.env` file in the project root (`Pawmilya/Pawmilya`) and set:
+
+```env
+EXPO_PUBLIC_API_URL=http://YOUR_BACKEND_HOST:3000/api
+```
+
+Examples:
+- Same machine: `http://localhost:3000/api`
+- Android emulator: `http://10.0.2.2:3000/api`
+- Physical device on same Wi-Fi: `http://<your-computer-ip>:3000/api`
+- Deployed backend: `https://your-api-domain.com/api`
+
+### 7. Start the Expo app
 
 ```bash
-# From the project root
+# From Pawmilya/Pawmilya
 npm start
 ```
 
 Scan the QR code with Expo Go or press `a` to open in an Android emulator.
+
+## Team Setup (Different Networks)
+
+If teammates are on different networks, do not use local IPs. Use one of these:
+
+1. Deploy backend to a public host (Render/Railway/Fly.io) and share one HTTPS API URL.
+2. Use a temporary tunnel (ngrok/cloudflared) to expose local backend for testing.
+3. Each teammate sets their own `EXPO_PUBLIC_API_URL` in local `.env`.
 
 ## API Routes
 

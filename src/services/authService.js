@@ -15,6 +15,15 @@ class AuthService {
         password: userData.password,
       });
 
+      // If 2FA is required, don't save auth data yet
+      if (response.data && response.data.requires2FA) {
+        return {
+          requires2FA: true,
+          tempToken: response.data.tempToken,
+          maskedEmail: response.data.maskedEmail,
+        };
+      }
+
       if (response.success && response.data.token) {
         await this.saveAuthData(response.data);
       }
@@ -33,6 +42,15 @@ class AuthService {
         password: credentials.password,
       });
 
+      // If 2FA is required, don't save auth data yet
+      if (response.data && response.data.requires2FA) {
+        return {
+          requires2FA: true,
+          tempToken: response.data.tempToken,
+          maskedEmail: response.data.maskedEmail,
+        };
+      }
+
       if (response.success && response.data.token) {
         await this.saveAuthData(response.data);
       }
@@ -43,10 +61,48 @@ class AuthService {
     }
   }
 
+  // Verify OTP for 2FA
+  async verifyOtp(tempToken, otp) {
+    try {
+      const response = await api.post(ENDPOINTS.VERIFY_OTP, {
+        tempToken,
+        otp,
+      });
+
+      if (response.success && response.data.token) {
+        await this.saveAuthData({
+          token: response.data.token,
+          refreshToken: response.data.refreshToken,
+          user: response.data.user,
+        });
+        return {
+          success: true,
+          user: response.data.user,
+          token: response.data.token,
+        };
+      }
+
+      return { success: false, message: 'Verification failed' };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Resend OTP
+  async resendOtp(tempToken) {
+    try {
+      return await api.post(ENDPOINTS.RESEND_OTP, { tempToken });
+    } catch (error) {
+      throw error;
+    }
+  }
+
   // Logout user
   async logout() {
     try {
-      await api.post(ENDPOINTS.LOGOUT);
+      // Send refresh token so backend can invalidate it too
+      const refreshToken = await api.getRefreshToken();
+      await api.post(ENDPOINTS.LOGOUT, refreshToken ? { refreshToken } : {});
     } catch (error) {
       // Continue with local logout even if server request fails
     } finally {
@@ -57,11 +113,14 @@ class AuthService {
   // Save authentication data to storage
   async saveAuthData(data) {
     try {
+      // Clear any stale tokens before saving new ones
+      await api.removeAuthToken();
+      await api.removeRefreshToken();
       if (data.token) {
-        await AsyncStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.token);
+        await api.setAuthToken(data.token);
       }
       if (data.refreshToken) {
-        await AsyncStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, data.refreshToken);
+        await api.setRefreshToken(data.refreshToken);
       }
       if (data.user) {
         await AsyncStorage.setItem(STORAGE_KEYS.USER_DATA, JSON.stringify(data.user));
@@ -74,11 +133,9 @@ class AuthService {
   // Clear authentication data from storage
   async clearAuthData() {
     try {
-      await AsyncStorage.multiRemove([
-        STORAGE_KEYS.AUTH_TOKEN,
-        STORAGE_KEYS.REFRESH_TOKEN,
-        STORAGE_KEYS.USER_DATA,
-      ]);
+      await api.removeAuthToken();
+      await api.removeRefreshToken();
+      await AsyncStorage.removeItem(STORAGE_KEYS.USER_DATA);
     } catch (error) {
       // Silent fail
     }
@@ -117,7 +174,7 @@ class AuthService {
   // Refresh access token
   async refreshToken() {
     try {
-      const refreshToken = await AsyncStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+      const refreshToken = await api.getRefreshToken();
       
       if (!refreshToken) {
         throw { message: 'No refresh token available' };
@@ -126,7 +183,10 @@ class AuthService {
       const response = await api.post(ENDPOINTS.REFRESH_TOKEN, { refreshToken });
 
       if (response.success && response.data.token) {
-        await AsyncStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, response.data.token);
+        await api.setAuthToken(response.data.token);
+      }
+      if (response.success && response.data.refreshToken) {
+        await api.setRefreshToken(response.data.refreshToken);
       }
 
       return response;

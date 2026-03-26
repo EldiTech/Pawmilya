@@ -103,12 +103,12 @@ router.get('/stats', async (req, res) => {
   try {
     // Get adoption count (approved adoptions)
     const adoptionsResult = await db.query(
-      `SELECT COUNT(*) as count FROM adoptions WHERE status = 'approved'`
+      `SELECT COUNT(*) as count FROM adoption_applications WHERE status = 'approved'`
     );
     
     // Get rescue count (completed rescues)
     const rescuesResult = await db.query(
-      `SELECT COUNT(*) as count FROM rescues WHERE status IN ('completed', 'rescued')`
+      `SELECT COUNT(*) as count FROM rescue_reports WHERE status IN ('rescued', 'verified', 'closed')`
     );
     
     // Get shelter count (active shelters)

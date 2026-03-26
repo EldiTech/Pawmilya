@@ -25,13 +25,19 @@ export const getImageUrl = (imagePath, placeholder = null) => {
     return imagePath;
   }
   
-  // If it's already a full URL, extract the path and rebuild with current base URL
-  // This handles cases where the stored URL has a different host
+  // If it's already a full URL:
+  // - Keep external CDN URLs as-is
+  // - Rebase only legacy local upload URLs to the current API host
   if (imagePath.startsWith('http')) {
     try {
       const url = new URL(imagePath);
       const path = url.pathname; // e.g., /uploads/pets/filename.jpg
-      return `${getBaseUrl()}${path}`;
+
+      if (path.startsWith('/uploads/')) {
+        return `${getBaseUrl()}${path}`;
+      }
+
+      return imagePath;
     } catch {
       return imagePath;
     }

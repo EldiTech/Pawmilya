@@ -9,13 +9,27 @@ require('dotenv').config();
 // Tracks and runs database migrations in order
 // Usage: node run-migrations.js [up|down|status|create name]
 
-const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'pawmilya',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD,
-});
+const useConnectionString = Boolean(process.env.DATABASE_URL);
+const sslEnabled = process.env.DB_SSL === 'true' || useConnectionString;
+const sslConfig = sslEnabled
+  ? { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false' }
+  : false;
+
+const pool = new Pool(
+  useConnectionString
+    ? {
+        connectionString: process.env.DATABASE_URL,
+        ssl: sslConfig,
+      }
+    : {
+        host: process.env.DB_HOST || 'localhost',
+        port: process.env.DB_PORT || 5432,
+        database: process.env.DB_NAME || 'Pawmilya',
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD,
+        ssl: sslConfig,
+      }
+);
 
 const MIGRATIONS_DIR = path.join(__dirname, 'database', 'migrations');
 

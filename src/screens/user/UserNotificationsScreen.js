@@ -49,7 +49,7 @@ const getNotificationIcon = (type, data) => {
   return NOTIFICATION_ICONS[type] || NOTIFICATION_ICONS.default;
 };
 
-const UserNotificationsScreen = ({ onGoBack, onNavigateToAdoptions, onNavigateToRescues }) => {
+const UserNotificationsScreen = ({ onGoBack, onNavigateToAdoptions, onNavigateToRescues, onNotificationsUpdated }) => {
   const { user } = useAuth();
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -97,6 +97,9 @@ const UserNotificationsScreen = ({ onGoBack, onNavigateToAdoptions, onNavigateTo
           notif.id === notificationId ? { ...notif, is_read: true } : notif
         )
       );
+      if (onNotificationsUpdated) {
+        onNotificationsUpdated();
+      }
     } catch (error) {
       console.error('Error marking notification as read:', error);
       // Still mark locally
@@ -105,8 +108,11 @@ const UserNotificationsScreen = ({ onGoBack, onNavigateToAdoptions, onNavigateTo
           notif.id === notificationId ? { ...notif, is_read: true } : notif
         )
       );
+      if (onNotificationsUpdated) {
+        onNotificationsUpdated();
+      }
     }
-  }, []);
+  }, [onNotificationsUpdated]);
 
   const markAllAsRead = useCallback(async () => {
     try {
@@ -115,14 +121,20 @@ const UserNotificationsScreen = ({ onGoBack, onNavigateToAdoptions, onNavigateTo
       setNotifications(prev =>
         prev.map(notif => ({ ...notif, is_read: true }))
       );
+      if (onNotificationsUpdated) {
+        onNotificationsUpdated();
+      }
     } catch (error) {
       console.error('Error marking all as read:', error);
       // Still mark locally
       setNotifications(prev =>
         prev.map(notif => ({ ...notif, is_read: true }))
       );
+      if (onNotificationsUpdated) {
+        onNotificationsUpdated();
+      }
     }
-  }, []);
+  }, [onNotificationsUpdated]);
 
   const unreadCount = useMemo(() => notifications.filter(n => !n.is_read).length, [notifications]);
 
@@ -202,7 +214,7 @@ const UserNotificationsScreen = ({ onGoBack, onNavigateToAdoptions, onNavigateTo
         </View>
       </TouchableOpacity>
     );
-  }, [markAsRead]);
+  }, [handleNotificationPress]);
 
   return (
     <View style={styles.container}>

@@ -13,7 +13,7 @@ const Joi = require('joi');
 const passwordSchema = Joi.string()
   .min(8)
   .max(128)
-  .pattern(new RegExp('^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]'))
+  .pattern(new RegExp('^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]+$'))
   .required()
   .messages({
     'string.min': 'Password must be at least 8 characters long',
@@ -265,7 +265,7 @@ const validate = (schema) => {
 const shelterApplicationSchema = Joi.object({
   shelter_name: Joi.string().min(2).max(200).required(),
   shelter_type: Joi.string().valid('government', 'private', 'ngo', 'rescue_group'),
-  description: Joi.string().max(2000),
+  description: Joi.string().max(2000).allow(''),
   address: Joi.string().max(500).required(),
   city: Joi.string().max(100).required(),
   state: Joi.string().max(100).allow('', null),

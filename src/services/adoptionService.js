@@ -57,14 +57,37 @@ class AdoptionService {
     }
   }
 
-  // Submit payment and delivery details for approved adoption
+  // Submit payment and delivery details for approved adoption (COD flow)
   async submitPaymentAndDelivery(paymentData) {
     try {
       const endpoint = ENDPOINTS.ADOPTION_PAYMENT.replace(':id', paymentData.adoptionId);
       return await api.post(endpoint, {
         deliveryDetails: paymentData.deliveryDetails,
         paymentAmount: paymentData.paymentAmount,
+        paymentMethod: paymentData.paymentMethod || 'cod',
       });
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Create PayMongo checkout session for online payment
+  async createCheckoutSession(adoptionId, deliveryDetails) {
+    try {
+      return await api.post(ENDPOINTS.CREATE_CHECKOUT, {
+        adoptionId,
+        deliveryDetails,
+      });
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Verify PayMongo payment status
+  async verifyPayment(adoptionId) {
+    try {
+      const endpoint = ENDPOINTS.VERIFY_PAYMENT.replace(':adoptionId', adoptionId);
+      return await api.get(endpoint);
     } catch (error) {
       throw error;
     }

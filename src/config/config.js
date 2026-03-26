@@ -1,9 +1,13 @@
 // API Configuration
-// Change this to your Node.js backend URL
-// For Android emulator: use 10.0.2.2
-// For physical device: use your computer's local IP address
-const DEV_API_URL = 'http://192.168.100.25:3000/api';
-const PROD_API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.100.25:3000/api';
+// Prefer EXPO_PUBLIC_API_URL for all environments.
+// Fallbacks are only for local development:
+// - Android emulator: http://10.0.2.2:3000/api
+// - Same machine (web/simulator): http://localhost:3000/api
+const FALLBACK_DEV_API_URL = 'http://10.0.2.2:3000/api';
+const FALLBACK_PROD_API_URL = 'http://localhost:3000/api';
+
+const DEV_API_URL = process.env.EXPO_PUBLIC_API_URL || FALLBACK_DEV_API_URL;
+const PROD_API_URL = process.env.EXPO_PUBLIC_API_URL || FALLBACK_PROD_API_URL;
 
 export const CONFIG = {
   API_URL: __DEV__ ? DEV_API_URL : PROD_API_URL,
@@ -15,6 +19,8 @@ export const CONFIG = {
     REGISTER: '/auth/register',
     LOGOUT: '/auth/logout',
     REFRESH_TOKEN: '/auth/refresh',
+    VERIFY_OTP: '/auth/verify-otp',
+    RESEND_OTP: '/auth/resend-otp',
     FORGOT_PASSWORD: '/auth/forgot-password',
     RESET_PASSWORD: '/auth/reset-password',
     
@@ -24,6 +30,8 @@ export const CONFIG = {
     UPDATE_PROFILE: '/users/profile',
     UPLOAD_AVATAR: '/users/avatar',
     CHANGE_PASSWORD: '/users/change-password',
+    TOGGLE_2FA: '/users/toggle-2fa',
+    DELETE_ACCOUNT: '/users/account',
     ALL_USERS: '/users/all',
     USER_FAVORITES: '/users/favorites',
     USER_APPLICATIONS: '/users/applications',
@@ -54,6 +62,10 @@ export const CONFIG = {
     CANCEL_ADOPTION: '/adoptions/:id/cancel',
     ADOPTION_PAYMENT: '/adoptions/:id/payment',
     
+    // Payments (PayMongo)
+    CREATE_CHECKOUT: '/payments/create-checkout',
+    VERIFY_PAYMENT: '/payments/verify/:adoptionId',
+    
     // Rescue Reports
     RESCUE_REPORTS: '/rescue-reports',
     RESCUE_STATS: '/rescue-reports/stats',
@@ -70,6 +82,7 @@ export const CONFIG = {
     AVAILABLE_SHELTERS: '/shelter-transfers/available-shelters',
     SHELTER_TRANSFER_REQUEST: '/shelter-transfers/request',
     MY_TRANSFER_REQUESTS: '/shelter-transfers/my-requests',
+    UPDATE_TRANSFER_DELIVERY_STATUS: '/shelter-transfers/:id/delivery-status',
     CANCEL_TRANSFER_REQUEST: '/shelter-transfers/:id/cancel',
     
     // Shelter Applications
@@ -80,7 +93,14 @@ export const CONFIG = {
     SHELTER_MANAGER_STATUS: '/shelter-manager/status',
     SHELTER_MANAGER_MY_SHELTER: '/shelter-manager/my-shelter',
     SHELTER_MANAGER_PETS: '/shelter-manager/pets',
+    SHELTER_MANAGER_PET_UPDATE: '/shelter-manager/pets/:id',
     SHELTER_MANAGER_TRANSFERS: '/shelter-manager/transfers',
+    SHELTER_MANAGER_ADOPTIONS: '/shelter-manager/adoptions',
+    SHELTER_MANAGER_PAYMENTS_OVERVIEW: '/shelter-manager/payments-overview',
+    SHELTER_MANAGER_ADOPTION_STATUS: '/shelter-manager/adoptions/:id/status',
+    SHELTER_MANAGER_ADOPTION_PAYMENT: '/shelter-manager/adoptions/:id/payment',
+    SHELTER_MANAGER_ADOPTION_VERIFY_PAYMENT: '/shelter-manager/adoptions/:id/verify-payment',
+    SHELTER_MANAGER_DELIVERY_STATUS: '/shelter-manager/deliveries/:id/status',
     
     // Admin Endpoints
     ADMIN_DASHBOARD_STATS: '/admin/dashboard/stats',
@@ -92,6 +112,10 @@ export const CONFIG = {
     ADMIN_ADOPTION_STATUS: '/admin/adoptions/:id/status',
     ADMIN_RESCUES: '/admin/rescues',
     ADMIN_RESCUE_STATUS: '/admin/rescues/:id/status',
+
+    // AI
+    AI_CHAT: '/ai/chat',
+    AI_CONTEXT: '/ai/context',
   },
   
   // Storage Keys
@@ -104,8 +128,7 @@ export const CONFIG = {
   // Request timeout (ms)
   TIMEOUT: 10000,
 
-  // Gemini AI Configuration (for Jemoy chatbot)
-  GEMINI_API_KEY: process.env.EXPO_PUBLIC_GEMINI_API_KEY || 'AIzaSyDp1Wdq-FIHcONSNeg8UsoY-JYmiRT3zG4',
+  // Gemini AI model preferences used by backend AI proxy
   GEMINI_MODELS: [
     'gemini-2.0-flash',
     'gemini-2.5-flash',

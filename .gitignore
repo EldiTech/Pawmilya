@@ -34,13 +34,39 @@ yarn-error.*
 .env
 .env.*
 !.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
 
 # logs
 logs/
 *.log
+*.pid
+*.pid.lock
 
 # typescript
 *.tsbuildinfo
+
+# coverage and generated reports
+coverage/
+backend/coverage/
+unused_report.json
+
+# local tooling and temp files
+.vscode/*
+!.vscode/extensions.json
+.cache/
+tmp/
+temp/
+
+# backend runtime artifacts
+backend/uploads/
+backend/tmp/
+
+# native build outputs
+**/build/
+android/.gradle/
+android/local.properties
 
 # generated native folders
 /ios

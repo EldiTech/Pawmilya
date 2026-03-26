@@ -208,8 +208,6 @@ const UserRescueScreen = ({ onNavigateToRescuerRegistration, onNavigateToReportR
   // Fetch rescue reports on mount (public data)
   useEffect(() => {
     fetchRescueReports();
-    // Also fetch user profile on mount if authenticated
-    fetchUserProfile();
   }, []);
 
   // Fetch user-specific data when user is available

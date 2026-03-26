@@ -110,12 +110,31 @@ const AdminAdoptionsScreen = ({ onGoBack, adminToken }) => {
           petAgeYears: app.pet_age_years,
           petAgeMonths: app.pet_age_months,
           petSpecies: app.pet_species,
+          adoptionFee: app.adoption_fee,
           applicant: app.applicant,
           applicantEmail: app.applicant_email,
           applicantPhone: app.applicant_phone,
           status: app.status,
           date: formatDate(app.submitted_at),
           approvedAt: app.approved_at ? formatDate(app.approved_at) : null,
+          // Payment info
+          paymentCompleted: app.payment_completed,
+          paymentAmount: app.payment_amount,
+          paymentDate: app.payment_date ? formatDate(app.payment_date) : null,
+          paymentMethod: app.payment_method,
+          paymongoCheckoutId: app.paymongo_checkout_id,
+          paymentVerifying: !!app.paymongo_checkout_id && !app.payment_completed,
+          paymentAdminVerified: app.payment_admin_verified,
+          // Delivery info
+          deliveryStatus: app.delivery_status,
+          deliveryFullName: app.delivery_full_name,
+          deliveryPhone: app.delivery_phone,
+          deliveryAddress: app.delivery_address,
+          deliveryCity: app.delivery_city,
+          deliveryPostalCode: app.delivery_postal_code,
+          deliveryNotes: app.delivery_notes,
+          deliveryScheduledDate: app.delivery_scheduled_date,
+          deliveryTrackingNotes: app.delivery_tracking_notes,
           // Living Situation
           livingSituation: app.living_situation,
           hasYard: app.has_yard,
@@ -349,6 +368,43 @@ const AdminAdoptionsScreen = ({ onGoBack, adminToken }) => {
     }
   }, [selectedApp, rejectionReason, applications, adminToken]);
 
+  // Confirm payment
+  const handleConfirmPayment = useCallback((app) => {
+    Alert.alert(
+      'Confirm Payment',
+      `Mark payment as completed for ${app.pet}'s adoption by ${app.applicant}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Confirm',
+          onPress: async () => {
+            try {
+              const response = await fetch(`${CONFIG.API_URL}/admin/adoptions/${app.id}/payment`, {
+                method: 'PUT',
+                headers: { 
+                  'Authorization': `Bearer ${adminToken}`,
+                  'Content-Type': 'application/json'
+                },
+              });
+              
+              if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error || 'Failed to confirm payment');
+              }
+              
+              setApplications(applications.map(a => 
+                a.id === app.id ? { ...a, paymentCompleted: true, paymentAdminVerified: true, paymentMethod: a.paymentMethod || 'manual' } : a
+              ));
+              Alert.alert('Success', 'Payment has been confirmed!');
+            } catch (error) {
+              Alert.alert('Error', error.message || 'Failed to confirm payment');
+            }
+          }
+        },
+      ]
+    );
+  }, [applications, adminToken]);
+
   // Delete application
   const handleDelete = useCallback((app) => {
     Alert.alert(
@@ -560,22 +616,78 @@ const AdminAdoptionsScreen = ({ onGoBack, adminToken }) => {
                     </View>
                   </View>
                   
-                  {/* Status Badge */}
-                  <View style={[
-                    styles.statusBadge, 
-                    { backgroundColor: STATUS_CONFIG[app.status]?.bg || '#F5F5F5' }
-                  ]}>
-                    <Ionicons 
-                      name={STATUS_CONFIG[app.status]?.icon || 'ellipse'} 
-                      size={14} 
-                      color={STATUS_CONFIG[app.status]?.color || '#999'} 
-                    />
-                    <Text style={[
-                      styles.statusText, 
-                      { color: STATUS_CONFIG[app.status]?.color || '#999' }
+                  <View style={styles.badgesWrapper}>
+                    {/* Status Badge */}
+                    <View style={[
+                      styles.statusBadge, 
+                      { backgroundColor: STATUS_CONFIG[app.status]?.bg || '#F5F5F5' }
                     ]}>
-                      {STATUS_CONFIG[app.status]?.label || app.status}
-                    </Text>
+                      <Ionicons 
+                        name={STATUS_CONFIG[app.status]?.icon || 'ellipse'} 
+                        size={14} 
+                        color={STATUS_CONFIG[app.status]?.color || '#999'} 
+                      />
+                      <Text style={[
+                        styles.statusText, 
+                        { color: STATUS_CONFIG[app.status]?.color || '#999' }
+                      ]}>
+                        {STATUS_CONFIG[app.status]?.label || app.status}
+                      </Text>
+                    </View>
+
+                    {/* Payment Badge - Hidden for Rescuer Adoptions */}
+                    {app.status === 'approved' && !app.isRescuerAdoption && (
+                      <View style={[
+                        styles.statusBadge, 
+                        { 
+                          backgroundColor: app.paymentAdminVerified
+                            ? '#ECFDF5'
+                            : app.paymentVerifying
+                              ? '#EFF6FF'
+                              : app.paymentCompleted
+                                ? '#EFF6FF'
+                                : '#FFFBEB', 
+                          marginTop: 6 
+                        }
+                      ]}>
+                        <Ionicons 
+                          name={app.paymentAdminVerified
+                            ? 'checkmark-circle'
+                            : app.paymentVerifying
+                              ? 'sync'
+                              : app.paymentCompleted
+                                ? 'alert-circle'
+                                : 'hourglass-outline'} 
+                          size={12} 
+                          color={app.paymentAdminVerified
+                            ? '#10B981'
+                            : app.paymentVerifying
+                              ? '#2563EB'
+                              : app.paymentCompleted
+                                ? '#3B82F6'
+                                : '#F59E0B'} 
+                        />
+                        <Text style={[
+                          styles.statusText, 
+                          { color: app.paymentAdminVerified
+                            ? '#10B981'
+                            : app.paymentVerifying
+                              ? '#2563EB'
+                              : app.paymentCompleted
+                                ? '#3B82F6'
+                                : '#F59E0B', fontSize: 10 }
+                        ]}>
+                          {app.paymentAdminVerified 
+                            ? 'Verified ✓'
+                            : app.paymentVerifying
+                              ? 'Payment Verifying'
+                              : app.paymentCompleted 
+                                ? 'Needs Review'
+                                : 'Awaiting Payment'
+                          }
+                        </Text>
+                      </View>
+                    )}
                   </View>
                 </View>
 
@@ -675,12 +787,166 @@ const AdminAdoptionsScreen = ({ onGoBack, adminToken }) => {
 
                 {/* Approved message with view/delete */}
                 {app.status === 'approved' && !app.isRescuerAdoption && (
-                  <View style={styles.approvedRow}>
-                    <View style={styles.successMessage}>
-                      <Ionicons name="checkmark-circle" size={18} color="#00B894" />
-                      <Text style={styles.successText}>This pet found a loving home!</Text>
-                    </View>
-                    <View style={styles.approvedActions}>
+                  <View>
+                    {app.paymentCompleted && app.paymentAdminVerified ? (
+                      /* STATE 3: Payment Verified by Admin */
+                      <View style={{
+                        backgroundColor: '#F0FDF4',
+                        borderRadius: 12,
+                        padding: 14,
+                        marginTop: 10,
+                        borderWidth: 1,
+                        borderColor: '#BBF7D0',
+                      }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <View style={{
+                            width: 28, height: 28, borderRadius: 14,
+                            backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center', marginRight: 10,
+                          }}>
+                            <Ionicons name="checkmark" size={16} color="#FFF" />
+                          </View>
+                          <Text style={{ fontSize: 14, fontWeight: '700', color: '#065F46', flex: 1 }}>Payment Verified</Text>
+                          <View style={{
+                            backgroundColor: '#D1FAE5', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8,
+                          }}>
+                            <Text style={{ fontSize: 11, fontWeight: '700', color: '#059669' }}>VERIFIED</Text>
+                          </View>
+                        </View>
+                      </View>
+                    ) : app.paymentCompleted && !app.paymentAdminVerified ? (
+                      /* STATE 2: Payment Made — Pending Admin Review */
+                      <View style={{
+                        backgroundColor: '#EFF6FF',
+                        borderRadius: 12,
+                        padding: 14,
+                        marginTop: 10,
+                        borderWidth: 1,
+                        borderColor: '#BFDBFE',
+                      }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                          <View style={{
+                            width: 28, height: 28, borderRadius: 14,
+                            backgroundColor: '#3B82F6', justifyContent: 'center', alignItems: 'center', marginRight: 10,
+                          }}>
+                            <Ionicons name="card" size={16} color="#FFF" />
+                          </View>
+                          <Text style={{ fontSize: 14, fontWeight: '700', color: '#1E40AF', flex: 1 }}>Payment Received</Text>
+                          <View style={{
+                            backgroundColor: '#DBEAFE', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8,
+                          }}>
+                            <Text style={{ fontSize: 11, fontWeight: '700', color: '#2563EB' }}>REVIEW</Text>
+                          </View>
+                        </View>
+                        <View style={{ backgroundColor: '#F0F5FF', borderRadius: 10, padding: 10, gap: 6 }}>
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                            <Text style={{ fontSize: 12, color: '#6B7280' }}>Amount</Text>
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E40AF' }}>
+                              ₱{Number(app.paymentAmount || app.adoptionFee || 0).toLocaleString()}
+                            </Text>
+                          </View>
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                            <Text style={{ fontSize: 12, color: '#6B7280' }}>Method</Text>
+                            <Text style={{ fontSize: 12, fontWeight: '600', color: '#1E40AF' }}>
+                              {(app.paymongoCheckoutId || app.paymentMethod === 'paymongo') ? 'PayMongo (Online)' : app.paymentMethod === 'cod' ? 'Cash on Delivery' : app.paymentMethod || 'Online'}
+                            </Text>
+                          </View>
+                          {app.paymentDate && (
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                              <Text style={{ fontSize: 12, color: '#6B7280' }}>Date</Text>
+                              <Text style={{ fontSize: 12, fontWeight: '600', color: '#1E40AF' }}>{app.paymentDate}</Text>
+                            </View>
+                          )}
+                          {app.paymongoCheckoutId && (
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <Text style={{ fontSize: 12, color: '#6B7280' }}>Ref ID</Text>
+                              <Text style={{ fontSize: 10, fontWeight: '600', color: '#4F46E5', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }} numberOfLines={1}>
+                                {app.paymongoCheckoutId}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                        <TouchableOpacity 
+                          onPress={() => handleConfirmPayment(app)}
+                          style={{
+                            backgroundColor: '#10B981', paddingVertical: 10, borderRadius: 10,
+                            flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+                            marginTop: 10,
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="checkmark-circle" size={16} color="#FFF" />
+                          <Text style={{ fontSize: 13, fontWeight: '700', color: '#FFF' }}>Verify Payment</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : app.paymentVerifying ? (
+                      /* STATE 1.5: Payment session exists — verification pending */
+                      <View style={{
+                        backgroundColor: '#EFF6FF',
+                        borderRadius: 12,
+                        padding: 14,
+                        marginTop: 10,
+                        borderWidth: 1,
+                        borderColor: '#BFDBFE',
+                      }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                          <View style={{
+                            width: 28, height: 28, borderRadius: 14,
+                            backgroundColor: '#2563EB', justifyContent: 'center', alignItems: 'center', marginRight: 10,
+                          }}>
+                            <Ionicons name="sync" size={16} color="#FFF" />
+                          </View>
+                          <Text style={{ fontSize: 14, fontWeight: '700', color: '#1E40AF', flex: 1 }}>Payment Verifying</Text>
+                          <View style={{
+                            backgroundColor: '#DBEAFE', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8,
+                          }}>
+                            <Text style={{ fontSize: 11, fontWeight: '700', color: '#2563EB' }}>PENDING</Text>
+                          </View>
+                        </View>
+                        <Text style={{ fontSize: 12, color: '#1E3A8A', lineHeight: 18 }}>
+                          User payment is submitted online. If this stays pending, verify it manually below.
+                        </Text>
+                        {app.paymongoCheckoutId && (
+                          <View style={{ backgroundColor: '#F0F5FF', borderRadius: 10, padding: 10, marginTop: 10 }}>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <Text style={{ fontSize: 12, color: '#6B7280' }}>Ref ID</Text>
+                              <Text style={{ fontSize: 10, fontWeight: '600', color: '#4F46E5', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }} numberOfLines={1}>
+                                {app.paymongoCheckoutId}
+                              </Text>
+                            </View>
+                          </View>
+                        )}
+                        <TouchableOpacity 
+                          onPress={() => handleConfirmPayment(app)}
+                          style={{
+                            backgroundColor: '#10B981', paddingVertical: 10, borderRadius: 10,
+                            flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+                            marginTop: 10,
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="checkmark-circle" size={16} color="#FFF" />
+                          <Text style={{ fontSize: 13, fontWeight: '700', color: '#FFF' }}>Verify Payment</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : (
+                      /* STATE 1: Awaiting Payment */
+                      <View style={{
+                        backgroundColor: '#FFFBEB',
+                        borderRadius: 12,
+                        padding: 14,
+                        marginTop: 10,
+                        borderWidth: 1,
+                        borderColor: '#FDE68A',
+                      }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Ionicons name="hourglass-outline" size={18} color="#F59E0B" />
+                          <Text style={{ fontSize: 13, fontWeight: '600', color: '#92400E', marginLeft: 8, flex: 1 }}>
+                            Awaiting Payment from User
+                          </Text>
+                        </View>
+                      </View>
+                    )}
+                    <View style={[styles.approvedActions, { marginTop: 10 }]}>
                       <TouchableOpacity 
                         onPress={() => handleViewDetails(app)}
                         style={styles.iconBtn}
@@ -1136,6 +1402,131 @@ const AdminAdoptionsScreen = ({ onGoBack, adminToken }) => {
                   </View>
                 )}
 
+                {/* Payment & Transaction Info (if approved and NOT rescuer adoption) */}
+                {selectedApp.status === 'approved' && !selectedApp.isRescuerAdoption && (
+                  <View style={styles.detailSection}>
+                    <View style={styles.detailSectionHeader}>
+                      <View style={[styles.sectionIconWrap, { backgroundColor: selectedApp.paymentCompleted ? '#D1FAE5' : selectedApp.paymentVerifying ? '#E0EAFF' : '#FEF3C7' }]}>
+                        <Ionicons 
+                          name={selectedApp.paymentCompleted ? 'card' : selectedApp.paymentVerifying ? 'sync' : 'wallet-outline'} 
+                          size={16} 
+                          color={selectedApp.paymentCompleted ? '#059669' : selectedApp.paymentVerifying ? '#2563EB' : '#D97706'} 
+                        />
+                      </View>
+                      <Text style={styles.detailSectionTitle}>Payment & Transaction</Text>
+                    </View>
+                    <View style={styles.detailGrid}>
+                      <View style={styles.detailItem}>
+                        <Ionicons 
+                          name={selectedApp.paymentCompleted ? 'checkmark-circle-outline' : selectedApp.paymentVerifying ? 'sync' : 'time'} 
+                          size={16} 
+                          color={selectedApp.paymentCompleted ? '#10B981' : selectedApp.paymentVerifying ? '#2563EB' : '#F59E0B'} 
+                        />
+                        <View style={styles.detailItemContent}>
+                          <Text style={styles.detailLabel}>Payment Status</Text>
+                          <Text style={[styles.detailValue, { color: selectedApp.paymentCompleted ? '#10B981' : selectedApp.paymentVerifying ? '#2563EB' : '#F59E0B', fontWeight: '600' }]}>
+                            {selectedApp.paymentCompleted 
+                              ? 'Paid' 
+                              : selectedApp.paymentVerifying 
+                                ? 'Payment Verifying'
+                                : 'Awaiting Payment'}
+                          </Text>
+                        </View>
+                      </View>
+                      {selectedApp.paymentCompleted && (
+                        <>
+                          <View style={styles.detailItem}>
+                            <Ionicons name="card-outline" size={16} color="#6366F1" />
+                            <View style={styles.detailItemContent}>
+                              <Text style={styles.detailLabel}>Payment Method</Text>
+                              <Text style={styles.detailValue}>
+                                {selectedApp.paymentMethod === 'paymongo' ? 'PayMongo (Online)' : selectedApp.paymentMethod === 'cod' ? 'Cash on Delivery' : selectedApp.paymentMethod || 'N/A'}
+                              </Text>
+                            </View>
+                          </View>
+                          <View style={styles.detailItem}>
+                            <Ionicons name="cash-outline" size={16} color="#10B981" />
+                            <View style={styles.detailItemContent}>
+                              <Text style={styles.detailLabel}>Amount Paid</Text>
+                              <Text style={styles.detailValue}>₱{Number(selectedApp.paymentAmount || selectedApp.adoptionFee || 0).toLocaleString()}</Text>
+                            </View>
+                          </View>
+                          {selectedApp.paymentDate && (
+                            <View style={styles.detailItem}>
+                              <Ionicons name="calendar-outline" size={16} color={ADMIN_COLORS.textMuted} />
+                              <View style={styles.detailItemContent}>
+                                <Text style={styles.detailLabel}>Payment Date</Text>
+                                <Text style={styles.detailValue}>{selectedApp.paymentDate}</Text>
+                              </View>
+                            </View>
+                          )}
+                          {(selectedApp.paymongoCheckoutId || selectedApp.paymentMethod === 'paymongo') && (
+                            <View style={styles.textBox}>
+                              <Text style={styles.textBoxLabel}>Payment Reference (Proof)</Text>
+                              <Text style={[styles.textBoxContent, { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 13, color: '#4F46E5' }]}>
+                                {selectedApp.paymongoCheckoutId || 'Paid Online'}
+                              </Text>
+                            </View>
+                          )}
+                        </>
+                      )}
+                    </View>
+                  </View>
+                )}
+
+                {/* Delivery Info (if payment completed) */}
+                {selectedApp.paymentCompleted && selectedApp.deliveryFullName && (
+                  <View style={styles.detailSection}>
+                    <View style={styles.detailSectionHeader}>
+                      <View style={[styles.sectionIconWrap, { backgroundColor: '#EEF2FF' }]}>
+                        <Ionicons name="car" size={16} color="#6366F1" />
+                      </View>
+                      <Text style={styles.detailSectionTitle}>Delivery Information</Text>
+                    </View>
+                    <View style={styles.detailGrid}>
+                      <View style={styles.detailItem}>
+                        <Ionicons name="navigate-outline" size={16} color="#6366F1" />
+                        <View style={styles.detailItemContent}>
+                          <Text style={styles.detailLabel}>Delivery Status</Text>
+                          <Text style={[styles.detailValue, { fontWeight: '600' }]}>
+                            {(selectedApp.deliveryStatus || 'processing').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.detailItem}>
+                        <Ionicons name="person-outline" size={16} color={ADMIN_COLORS.textMuted} />
+                        <View style={styles.detailItemContent}>
+                          <Text style={styles.detailLabel}>Recipient</Text>
+                          <Text style={styles.detailValue}>{selectedApp.deliveryFullName}</Text>
+                        </View>
+                      </View>
+                      <View style={styles.detailItem}>
+                        <Ionicons name="call-outline" size={16} color={ADMIN_COLORS.textMuted} />
+                        <View style={styles.detailItemContent}>
+                          <Text style={styles.detailLabel}>Phone</Text>
+                          <Text style={styles.detailValue}>{selectedApp.deliveryPhone}</Text>
+                        </View>
+                      </View>
+                      <View style={styles.detailItemFull}>
+                        <Ionicons name="location-outline" size={16} color={ADMIN_COLORS.textMuted} />
+                        <View style={styles.detailItemContent}>
+                          <Text style={styles.detailLabel}>Address</Text>
+                          <Text style={styles.detailValue}>{selectedApp.deliveryAddress}, {selectedApp.deliveryCity}{selectedApp.deliveryPostalCode ? ` ${selectedApp.deliveryPostalCode}` : ''}</Text>
+                        </View>
+                      </View>
+                      {selectedApp.deliveryNotes && (
+                        <View style={styles.detailItemFull}>
+                          <Ionicons name="chatbubble-outline" size={16} color={ADMIN_COLORS.textMuted} />
+                          <View style={styles.detailItemContent}>
+                            <Text style={styles.detailLabel}>Delivery Notes</Text>
+                            <Text style={styles.detailValue}>{selectedApp.deliveryNotes}</Text>
+                          </View>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                )}
+
                 <View style={{ height: 20 }} />
               </ScrollView>
             )}
@@ -1533,6 +1924,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
+  },
+  badgesWrapper: {
+    alignItems: 'flex-end',
+    marginLeft: 10,
+    flexShrink: 0,
   },
   petInfoWrap: {
     flexDirection: 'row',

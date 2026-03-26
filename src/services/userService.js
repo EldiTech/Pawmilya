@@ -69,6 +69,24 @@ class UserService {
     }
   }
 
+  // Toggle 2FA
+  async toggle2FA() {
+    try {
+      return await api.put(ENDPOINTS.TOGGLE_2FA);
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Delete current user account
+  async deleteAccount() {
+    try {
+      return await api.delete(ENDPOINTS.DELETE_ACCOUNT);
+    } catch (error) {
+      throw error;
+    }
+  }
+
   // Get user's favorite pets
   async getFavorites() {
     try {

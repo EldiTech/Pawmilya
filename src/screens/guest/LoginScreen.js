@@ -1,4 +1,4 @@
-import React, { useState, memo } from 'react';
+import React, { useState, memo } from "react";
 import {
   View,
   Text,
@@ -10,23 +10,32 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import Logo from '../../components/Logo';
-import { COLORS, FONTS, SPACING, RADIUS } from '../../constants/theme';
-import { isAdminLogin } from '../../config/adminCredentials';
-import { useAuth } from '../../context/AuthContext';
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import Logo from "../../components/Logo";
+import { COLORS, FONTS, SPACING, RADIUS } from "../../constants/theme";
+import { isAdminLogin } from "../../config/adminCredentials";
+import { useAuth } from "../../context/AuthContext";
+import { SuspendedAccountModal } from "../user";
 
-const LoginScreen = ({ onNavigateToSignUp, onGoBack, onLoginSuccess, onAdminLogin }) => {
+const LoginScreen = ({
+  onNavigateToSignUp,
+  onGoBack,
+  onLoginSuccess,
+  onAdminLogin,
+  onRequire2FA,
+}) => {
   const { login } = useAuth();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [isSuspended, setIsSuspended] = useState(false);
+  const [suspensionReason, setSuspensionReason] = useState("");
 
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
-      Alert.alert('Error', 'Please enter email and password');
+      Alert.alert("Error", "Please enter email and password");
       return;
     }
 
@@ -35,26 +44,49 @@ const LoginScreen = ({ onNavigateToSignUp, onGoBack, onLoginSuccess, onAdminLogi
       // Check if admin login via API
       const adminResult = await isAdminLogin(email, password);
       if (adminResult.success) {
+        setLoading(false);
         onAdminLogin && onAdminLogin(adminResult.token);
         return;
       }
 
       // Regular user login via API
       const response = await login(email, password);
-      
+
       if (response.success) {
-        onLoginSuccess && onLoginSuccess();
+        if (response.requires2FA) {
+          // Navigate to 2FA verification screen
+          onRequire2FA &&
+            onRequire2FA({
+              tempToken: response.tempToken,
+              maskedEmail: response.maskedEmail,
+            });
+        } else {
+          onLoginSuccess && onLoginSuccess();
+        }
       } else {
-        Alert.alert(
-          'Login Failed',
-          response.message || 'Invalid email or password. Please try again.'
-        );
+        if (
+          response.message &&
+          response.message.toLowerCase().includes("suspended")
+        ) {
+          setSuspensionReason("Violation of community guidelines");
+          setIsSuspended(true);
+        } else {
+          Alert.alert(
+            "Login Failed",
+            response.message || "Invalid email or password. Please try again."
+          );
+        }
       }
     } catch (error) {
-      Alert.alert(
-        'Login Failed',
-        error.message || 'Invalid email or password. Please try again.'
-      );
+      if (error.message && error.message.toLowerCase().includes("suspended")) {
+        setSuspensionReason("Violation of community guidelines");
+        setIsSuspended(true);
+      } else {
+        Alert.alert(
+          "Login Failed",
+          error.message || "Invalid email or password. Please try again."
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -63,14 +95,14 @@ const LoginScreen = ({ onNavigateToSignUp, onGoBack, onLoginSuccess, onAdminLogi
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.background} />
-      
-      <KeyboardAvoidingView 
+
+      <KeyboardAvoidingView
         style={styles.content}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
         {/* Back Button */}
-        <TouchableOpacity 
-          style={styles.backButton} 
+        <TouchableOpacity
+          style={styles.backButton}
           onPress={onGoBack}
           accessibilityLabel="Go back"
           accessibilityRole="button"
@@ -81,7 +113,9 @@ const LoginScreen = ({ onNavigateToSignUp, onGoBack, onLoginSuccess, onAdminLogi
         {/* Logo Section */}
         <View style={styles.logoSection} accessibilityRole="header">
           <Logo size="large" />
-          <Text style={styles.appName} accessibilityRole="header">Pawmilya</Text>
+          <Text style={styles.appName} accessibilityRole="header">
+            Pawmilya
+          </Text>
           <Text style={styles.tagline}>Every paw deserves a home</Text>
         </View>
 
@@ -103,7 +137,11 @@ const LoginScreen = ({ onNavigateToSignUp, onGoBack, onLoginSuccess, onAdminLogi
           </View>
 
           <View style={styles.inputContainer}>
-            <Ionicons name="lock-closed-outline" size={20} color={COLORS.textMedium} />
+            <Ionicons
+              name="lock-closed-outline"
+              size={20}
+              color={COLORS.textMedium}
+            />
             <TextInput
               style={styles.input}
               placeholder="Password"
@@ -114,22 +152,24 @@ const LoginScreen = ({ onNavigateToSignUp, onGoBack, onLoginSuccess, onAdminLogi
               accessibilityLabel="Password input"
               accessibilityHint="Enter your password"
             />
-            <TouchableOpacity 
+            <TouchableOpacity
               onPress={() => setShowPassword(!showPassword)}
-              accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+              accessibilityLabel={
+                showPassword ? "Hide password" : "Show password"
+              }
               accessibilityRole="button"
             >
-              <Ionicons 
-                name={showPassword ? "eye-outline" : "eye-off-outline"} 
-                size={20} 
-                color={COLORS.textMedium} 
+              <Ionicons
+                name={showPassword ? "eye-outline" : "eye-off-outline"}
+                size={20}
+                color={COLORS.textMedium}
               />
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity 
-            style={[styles.loginButton, loading && styles.loginButtonDisabled]} 
-            activeOpacity={0.8} 
+          <TouchableOpacity
+            style={[styles.loginButton, loading && styles.loginButtonDisabled]}
+            activeOpacity={0.8}
             onPress={handleLogin}
             disabled={loading}
             accessibilityLabel="Sign in button"
@@ -137,7 +177,10 @@ const LoginScreen = ({ onNavigateToSignUp, onGoBack, onLoginSuccess, onAdminLogi
             accessibilityState={{ disabled: loading }}
           >
             {loading ? (
-              <ActivityIndicator color={COLORS.textWhite} accessibilityLabel="Signing in" />
+              <ActivityIndicator
+                color={COLORS.textWhite}
+                accessibilityLabel="Signing in"
+              />
             ) : (
               <Text style={styles.loginButtonText}>Sign In</Text>
             )}
@@ -147,7 +190,7 @@ const LoginScreen = ({ onNavigateToSignUp, onGoBack, onLoginSuccess, onAdminLogi
         {/* Sign Up Link */}
         <View style={styles.signUpContainer}>
           <Text style={styles.signUpText}>Don't have an account? </Text>
-          <TouchableOpacity 
+          <TouchableOpacity
             onPress={onNavigateToSignUp}
             accessibilityLabel="Sign up"
             accessibilityRole="link"
@@ -157,6 +200,13 @@ const LoginScreen = ({ onNavigateToSignUp, onGoBack, onLoginSuccess, onAdminLogi
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      {/* Suspended Account Modal */}
+      <SuspendedAccountModal
+        visible={isSuspended}
+        reason={suspensionReason}
+        onAcknowledge={() => setIsSuspended(false)}
+      />
     </View>
   );
 };
@@ -165,17 +215,17 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
-    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 44,
+    paddingTop: Platform.OS === "android" ? StatusBar.currentHeight : 44,
   },
   content: {
     flex: 1,
-    justifyContent: 'center',
+    justifyContent: "center",
     paddingHorizontal: SPACING.xl,
   },
 
   // Back Button
   backButton: {
-    position: 'absolute',
+    position: "absolute",
     top: SPACING.lg,
     left: SPACING.md,
     padding: SPACING.sm,
@@ -184,7 +234,7 @@ const styles = StyleSheet.create({
 
   // Logo
   logoSection: {
-    alignItems: 'center',
+    alignItems: "center",
     marginBottom: SPACING.xxxl,
   },
   appName: {
@@ -204,8 +254,8 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.xl,
   },
   inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: COLORS.backgroundWhite,
     borderRadius: RADIUS.md,
     paddingHorizontal: SPACING.lg,
@@ -225,8 +275,8 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary,
     paddingVertical: SPACING.lg,
     borderRadius: RADIUS.round,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     marginTop: SPACING.lg,
   },
   loginButtonDisabled: {
@@ -240,8 +290,8 @@ const styles = StyleSheet.create({
 
   // Sign Up
   signUpContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
+    flexDirection: "row",
+    justifyContent: "center",
   },
   signUpText: {
     fontSize: FONTS.sizes.md,

@@ -370,7 +370,7 @@ const DeliveryCard = ({ delivery, onPress, onQuickUpdate, adminToken }) => {
 
           <View style={styles.paymentRow}>
             <Ionicons name="card-outline" size={14} color="#10B981" />
-            <Text style={styles.paymentText}>₱{Number(delivery.payment_amount || 0).toLocaleString()}</Text>
+            <Text style={styles.paymentText}>₱{Number(delivery.payment_amount ?? delivery.adoption_fee ?? 0).toLocaleString()}</Text>
             <Text style={styles.paymentDate}>• {formatDate(delivery.payment_date)}</Text>
           </View>
         </View>

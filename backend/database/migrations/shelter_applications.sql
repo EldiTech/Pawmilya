@@ -1,12 +1,40 @@
 -- Migration: Add user_id to shelter_applications and manager_id to shelters
--- shelter_applications table already exists with columns:
---   id, applicant_name, applicant_email, applicant_phone, shelter_name, shelter_type,
---   description, address, city, state, latitude, longitude, contact_person_name,
---   phone, email, animals_accepted, shelter_capacity, services_offered, operating_hours,
---   logo_image, cover_image, business_permit, registration_certificate, government_id,
---   other_documents, status, admin_feedback, reviewed_by, reviewed_at, created_shelter_id,
---   created_at, updated_at
 
+CREATE TABLE IF NOT EXISTS shelter_applications (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    applicant_name VARCHAR(255) NOT NULL,
+    applicant_email VARCHAR(255) NOT NULL,
+    applicant_phone VARCHAR(50) NOT NULL,
+    shelter_name VARCHAR(255) NOT NULL,
+    shelter_type VARCHAR(100),
+    description TEXT,
+    address TEXT NOT NULL,
+    city VARCHAR(100),
+    state VARCHAR(100),
+    latitude DECIMAL(10, 8),
+    longitude DECIMAL(11, 8),
+    contact_person_name VARCHAR(255),
+    phone VARCHAR(50),
+    email VARCHAR(255),
+    animals_accepted TEXT[],
+    shelter_capacity INTEGER,
+    services_offered TEXT[],
+    operating_hours TEXT,
+    logo_image TEXT,
+    cover_image TEXT,
+    business_permit TEXT,
+    registration_certificate TEXT,
+    government_id TEXT,
+    other_documents TEXT[],
+    status VARCHAR(50) DEFAULT 'pending',
+    admin_feedback TEXT,
+    reviewed_by INTEGER REFERENCES users(id),
+    reviewed_at TIMESTAMP,
+    created_shelter_id INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 -- Add user_id so we can link applications to authenticated users
 ALTER TABLE shelter_applications ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
 

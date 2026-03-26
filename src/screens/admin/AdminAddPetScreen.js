@@ -49,6 +49,7 @@ const VACCINATION_OPTIONS = [
 const AdminAddPetScreen = ({ onGoBack, adminToken }) => {
   const [loading, setLoading] = useState(false);
   const [images, setImages] = useState([]);
+  const [imageUrlInput, setImageUrlInput] = useState('');
   const [categories] = useState(PET_CATEGORIES);
   
   // Location search state
@@ -136,6 +137,21 @@ const AdminAddPetScreen = ({ onGoBack, adminToken }) => {
     setFormData(prev => ({ ...prev, [field]: value }));
   }, []);
 
+  const appendImageAsset = useCallback((asset) => {
+    if (!asset) return;
+
+    if (asset.base64) {
+      const mimeType = asset.mimeType || 'image/jpeg';
+      const base64Uri = `data:${mimeType};base64,${asset.base64}`;
+      setImages(prev => [...prev, base64Uri]);
+      return;
+    }
+
+    if (asset.uri) {
+      setImages(prev => [...prev, asset.uri]);
+    }
+  }, []);
+
   const pickImage = async () => {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -154,21 +170,53 @@ const AdminAddPetScreen = ({ onGoBack, adminToken }) => {
       });
 
       if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
-        // Store both uri for preview and base64 for upload
-        if (asset.base64) {
-          const mimeType = asset.mimeType || 'image/jpeg';
-          const base64Uri = `data:${mimeType};base64,${asset.base64}`;
-          setImages(prev => [...prev, base64Uri]);
-        } else {
-          // Fallback to uri if base64 not available
-          setImages(prev => [...prev, asset.uri]);
-        }
+        appendImageAsset(result.assets[0]);
       }
     } catch (error) {
       console.error('Error picking image:', error);
       Alert.alert('Error', 'Failed to pick image');
     }
+  };
+
+  const takePhoto = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Please allow camera access to take a pet photo.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        appendImageAsset(result.assets[0]);
+      }
+    } catch (error) {
+      console.error('Error taking image:', error);
+      Alert.alert('Error', 'Failed to take photo');
+    }
+  };
+
+  const addImageFromUrl = () => {
+    const trimmedUrl = imageUrlInput.trim();
+    if (!trimmedUrl) {
+      Alert.alert('Validation Error', 'Please enter an image URL first.');
+      return;
+    }
+
+    if (!/^https?:\/\//i.test(trimmedUrl)) {
+      Alert.alert('Invalid URL', 'Image URL must start with http:// or https://');
+      return;
+    }
+
+    setImages(prev => [...prev, trimmedUrl]);
+    setImageUrlInput('');
   };
 
   const removeImage = (index) => {
@@ -212,6 +260,9 @@ const AdminAddPetScreen = ({ onGoBack, adminToken }) => {
               // Check if already base64
               if (uri.startsWith('data:image')) {
                 console.log('Image already base64, length:', uri.length);
+                base64Images.push(uri);
+              } else if (uri.startsWith('http://') || uri.startsWith('https://')) {
+                // Keep externally hosted image URLs as-is.
                 base64Images.push(uri);
               } else {
                 // Need to convert file URI to base64
@@ -427,6 +478,30 @@ const AdminAddPetScreen = ({ onGoBack, adminToken }) => {
           <View style={styles.section}>
             {renderSectionHeader('Pet Photos', 'camera')}
             <View style={styles.imageSection}>
+              <View style={styles.imageActionsRow}>
+                <TouchableOpacity style={styles.imageActionButton} onPress={pickImage} activeOpacity={0.8}>
+                  <Ionicons name="images-outline" size={18} color={ADMIN_COLORS.primary} />
+                  <Text style={styles.imageActionText}>Gallery</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.imageActionButton} onPress={takePhoto} activeOpacity={0.8}>
+                  <Ionicons name="camera-outline" size={18} color={ADMIN_COLORS.primary} />
+                  <Text style={styles.imageActionText}>Camera</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.urlInputRow}>
+                <TextInput
+                  style={styles.urlInput}
+                  placeholder="Paste image URL (https://...)"
+                  placeholderTextColor={ADMIN_COLORS.textMuted}
+                  value={imageUrlInput}
+                  onChangeText={setImageUrlInput}
+                  autoCapitalize="none"
+                  keyboardType="url"
+                />
+                <TouchableOpacity style={styles.urlAddButton} onPress={addImageFromUrl} activeOpacity={0.8}>
+                  <Ionicons name="link" size={18} color="#FFF" />
+                </TouchableOpacity>
+              </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <View style={styles.imageRow}>
                   {images.map((uri, index) => (
@@ -447,7 +522,7 @@ const AdminAddPetScreen = ({ onGoBack, adminToken }) => {
                   ))}
                   <TouchableOpacity style={styles.addImageBtn} onPress={pickImage}>
                     <Ionicons name="add-circle-outline" size={32} color={ADMIN_COLORS.primary} />
-                    <Text style={styles.addImageText}>Add Photo</Text>
+                    <Text style={styles.addImageText}>Add More</Text>
                   </TouchableOpacity>
                 </View>
               </ScrollView>
@@ -905,6 +980,53 @@ const styles = StyleSheet.create({
   },
   imageSection: {
     marginTop: 4,
+  },
+  imageActionsRow: {
+    flexDirection: 'row',
+    marginBottom: 10,
+    gap: 10,
+  },
+  imageActionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: ADMIN_COLORS.background,
+    borderWidth: 1,
+    borderColor: ADMIN_COLORS.border,
+    borderRadius: 10,
+    paddingVertical: 10,
+  },
+  imageActionText: {
+    marginLeft: 8,
+    fontSize: 13,
+    fontWeight: '600',
+    color: ADMIN_COLORS.text,
+  },
+  urlInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  urlInput: {
+    flex: 1,
+    backgroundColor: ADMIN_COLORS.background,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: ADMIN_COLORS.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: ADMIN_COLORS.text,
+    marginRight: 10,
+  },
+  urlAddButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: ADMIN_COLORS.primary,
   },
   imageRow: {
     flexDirection: 'row',

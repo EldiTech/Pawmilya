@@ -48,6 +48,35 @@ router.get('/dashboard/stats', async (req, res) => {
 
 // ==================== PETS MANAGEMENT ====================
 
+const ALLOWED_PET_UPDATE_FIELDS = {
+  name: 'name',
+  category_id: 'category_id',
+  breed_id: 'breed_id',
+  breed_name: 'breed_name',
+  age_years: 'age_years',
+  age_months: 'age_months',
+  gender: 'gender',
+  size: 'size',
+  weight_kg: 'weight_kg',
+  color: 'color',
+  description: 'description',
+  medical_history: 'medical_history',
+  vaccination_status: 'vaccination_status',
+  is_neutered: 'is_neutered',
+  is_house_trained: 'is_house_trained',
+  is_good_with_kids: 'is_good_with_kids',
+  is_good_with_other_pets: 'is_good_with_other_pets',
+  temperament: 'temperament',
+  special_needs: 'special_needs',
+  status: 'status',
+  is_featured: 'is_featured',
+  shelter_id: 'shelter_id',
+  location: 'location',
+  latitude: 'latitude',
+  longitude: 'longitude',
+  adoption_fee: 'adoption_fee',
+};
+
 // Get pet categories (creates defaults if none exist)
 router.get('/pet-categories', async (req, res) => {
   try {
@@ -244,14 +273,24 @@ router.put('/pets/:id', async (req, res) => {
     const petId = req.params.id;
     const updates = req.body;
 
-    // Build dynamic update query
-    const fields = Object.keys(updates).filter(k => k !== 'id' && k !== 'images');
-    if (fields.length === 0) {
+    const inputFields = Object.keys(updates).filter(k => k !== 'id' && k !== 'images');
+    if (inputFields.length === 0) {
       return res.status(400).json({ error: 'No fields to update' });
     }
 
+    const disallowedFields = inputFields.filter((field) => !ALLOWED_PET_UPDATE_FIELDS[field]);
+    if (disallowedFields.length > 0) {
+      return res.status(400).json({
+        error: 'Invalid field(s) for update',
+        invalidFields: disallowedFields,
+      });
+    }
+
+    // Build dynamic query only from server-controlled whitelist mappings.
+    const fields = inputFields.map((field) => ALLOWED_PET_UPDATE_FIELDS[field]);
+
     const setClause = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
-    const values = fields.map(f => updates[f]);
+    const values = inputFields.map((f) => updates[f]);
     values.push(req.admin.id, petId);
 
     await db.query(
@@ -419,7 +458,7 @@ router.post('/users', async (req, res) => {
 
     // Hash password
     const bcrypt = require('bcrypt');
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, 12);
 
     const result = await db.query(
       `INSERT INTO users (email, password_hash, full_name, phone, status, created_at)
@@ -498,47 +537,128 @@ router.put('/users/:id', async (req, res) => {
 
 // Delete user (admin)
 router.delete('/users/:id', async (req, res) => {
+  const client = await db.pool.connect();
   try {
     const userId = req.params.id;
 
     // Get user info for logging
-    const user = await db.query('SELECT email, full_name FROM users WHERE id = $1', [userId]);
+    const user = await client.query('SELECT email, full_name FROM users WHERE id = $1', [userId]);
     if (user.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    await client.query('BEGIN');
+
+    // Detach shelter manager relationships to satisfy FK constraints.
+    await client.query('UPDATE shelters SET manager_id = NULL WHERE manager_id = $1', [userId]);
+    await client.query('UPDATE users SET managed_shelter_id = NULL WHERE id = $1', [userId]);
+
+    // Delete user-owned rescues unless they were already transferred/handled by others.
+    await client.query(
+      `DELETE FROM rescue_reports rr
+       WHERE rr.reporter_id = $1
+         AND COALESCE(rr.rescuer_id::text, $1::text) = $1::text
+         AND NOT EXISTS (
+           SELECT 1
+           FROM shelter_transfer_requests str
+           WHERE str.rescue_report_id = rr.id
+             AND str.status IN ('approved', 'accepted', 'in_transit', 'arrived_at_shelter', 'completed')
+         )`,
+      [userId]
+    );
+
+    // Preserve transferred rescues but remove personal reporter details of deleted user.
+    await client.query(
+      `UPDATE rescue_reports
+       SET reporter_id = NULL,
+           reporter_name = 'Deleted User',
+           reporter_phone = NULL,
+           reporter_email = NULL,
+           updated_at = NOW()
+       WHERE reporter_id = $1`,
+      [userId]
+    );
+
+    // Remove deleted user from rescuer assignment on remaining rescues.
+    await client.query('UPDATE rescue_reports SET rescuer_id = NULL WHERE rescuer_id = $1', [userId]);
+
+    // Delete user-created pets unless already transferred to another adopter.
+    await client.query(
+      `DELETE FROM pets p
+       WHERE p.created_by::text = $1::text
+         AND NOT (
+           p.status = 'adopted'
+           OR EXISTS (
+             SELECT 1
+             FROM adoption_applications aa
+             WHERE aa.pet_id = p.id
+               AND aa.status = 'approved'
+               AND aa.user_id IS NOT NULL
+               AND aa.user_id::text <> $1::text
+           )
+         )`,
+      [userId]
+    );
+
+    // Preserve transferred pets but remove creator/updater ownership traces.
+    await client.query(
+      `UPDATE pets
+       SET created_by = CASE WHEN created_by::text = $1::text THEN NULL ELSE created_by END,
+           updated_by = CASE WHEN updated_by::text = $1::text THEN NULL ELSE updated_by END,
+           updated_at = NOW()
+       WHERE created_by::text = $1::text OR updated_by::text = $1::text`,
+      [userId]
+    );
+
+    // Keep transferred shelter requests but remove requester link if user is deleted.
+    await client.query(
+      `DELETE FROM shelter_transfer_requests
+       WHERE requester_id = $1
+         AND status IN ('pending', 'rejected', 'cancelled')`,
+      [userId]
+    );
+    await client.query(
+      `UPDATE shelter_transfer_requests
+       SET requester_id = NULL,
+           updated_at = NOW()
+       WHERE requester_id = $1`,
+      [userId]
+    );
+
     // Delete related rescuer applications first
-    await db.query('DELETE FROM rescuer_applications WHERE user_id = $1', [userId]);
+    await client.query('DELETE FROM rescuer_applications WHERE user_id = $1', [userId]);
+
+    // Delete related shelter applications
+    await client.query('DELETE FROM shelter_applications WHERE user_id = $1', [userId]);
     
     // Delete related notifications
-    await db.query('DELETE FROM notifications WHERE user_id = $1', [userId]);
-
-    // Set rescuer_id to NULL for rescue reports where this user was assigned as rescuer
-    await db.query('UPDATE rescue_reports SET rescuer_id = NULL WHERE rescuer_id = $1', [userId]);
-
-    // Set reporter_id to NULL for rescue reports created by this user
-    await db.query('UPDATE rescue_reports SET reporter_id = NULL WHERE reporter_id = $1', [userId]);
+    await client.query('DELETE FROM notifications WHERE user_id = $1', [userId]);
 
     // Set user_id to NULL for adoption applications
-    await db.query('UPDATE adoption_applications SET user_id = NULL WHERE user_id = $1', [userId]);
+    await client.query('UPDATE adoption_applications SET user_id = NULL WHERE user_id = $1', [userId]);
 
     // Delete user saved pets
-    await db.query('DELETE FROM user_saved_pets WHERE user_id = $1', [userId]);
+    await client.query('DELETE FROM user_saved_pets WHERE user_id = $1', [userId]);
 
     // Delete user (cascade will handle related records if set up)
-    await db.query('DELETE FROM users WHERE id = $1', [userId]);
+    await client.query('DELETE FROM users WHERE id = $1', [userId]);
 
     // Log activity
-    await db.query(
+    await client.query(
       `INSERT INTO admin_activity_logs (admin_id, action, entity_type, entity_id, details)
        VALUES ($1, 'delete_user', 'user', $2, $3)`,
       [req.admin.id, userId, JSON.stringify({ email: user.rows[0].email, full_name: user.rows[0].full_name })]
     );
 
+    await client.query('COMMIT');
+
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Delete user error:', error);
     res.status(500).json({ error: 'Failed to delete user' });
+  } finally {
+    client.release();
   }
 });
 
@@ -558,9 +678,16 @@ router.get('/adoptions', async (req, res) => {
              a.emergency_contact_name, a.emergency_contact_phone,
              a.veterinarian_name, a.veterinarian_phone,
              a.additional_notes, a.review_notes, a.rejection_reason,
+             a.payment_completed, a.payment_amount, a.payment_date,
+             a.payment_method, a.paymongo_checkout_id,
+             CASE WHEN a.payment_completed = TRUE THEN TRUE ELSE FALSE END as payment_admin_verified,
+             a.delivery_status, a.delivery_full_name, a.delivery_phone,
+             a.delivery_address, a.delivery_city, a.delivery_postal_code,
+             a.delivery_notes, a.delivery_scheduled_date, a.delivery_tracking_notes,
              u.full_name as applicant, u.email as applicant_email, u.phone as applicant_phone,
              p.name as pet, p.breed_name as pet_breed, p.gender as pet_gender,
              p.age_years as pet_age_years, p.age_months as pet_age_months,
+             p.adoption_fee,
              pc.name as pet_species,
              COALESCE(
                (SELECT image_url FROM pet_images WHERE pet_id = p.id AND is_primary = TRUE LIMIT 1),
@@ -571,7 +698,7 @@ router.get('/adoptions', async (req, res) => {
       JOIN users u ON a.user_id = u.id
       JOIN pets p ON a.pet_id = p.id
       LEFT JOIN pet_categories pc ON p.category_id = pc.id
-      WHERE 1=1
+      WHERE p.shelter_id IS NULL
     `;
 
     const params = [];
@@ -612,7 +739,7 @@ router.put('/adoptions/:id/status', async (req, res) => {
         approved_at = $4,
         updated_at = NOW()
        WHERE id = $5
-       RETURNING pet_id`,
+       RETURNING pet_id, user_id`,
       [
         status,
         review_notes,
@@ -625,11 +752,40 @@ router.put('/adoptions/:id/status', async (req, res) => {
     // Update pet status based on adoption status
     if (result.rows.length > 0) {
       const petId = result.rows[0].pet_id;
+      const userId = result.rows[0].user_id;
       let petStatus = 'available';
-      if (status === 'approved') petStatus = 'adopted';
+      if (status === 'approved') petStatus = 'pending'; // stays pending until payment
       else if (status === 'reviewing' || status === 'pending') petStatus = 'pending';
 
       await db.query('UPDATE pets SET status = $1 WHERE id = $2', [petStatus, petId]);
+
+      // Send notification to user
+      if (userId) {
+        const pet = await db.query('SELECT name FROM pets WHERE id = $1', [petId]);
+        const petName = pet.rows[0]?.name || 'your pet';
+        let notifTitle, notifMessage, notifType;
+
+        if (status === 'approved') {
+          notifTitle = 'Adoption Approved! 🎉';
+          notifMessage = `Great news! Your adoption application for ${petName} has been approved. Please proceed to payment to complete the adoption.`;
+          notifType = 'adoption_update';
+        } else if (status === 'rejected') {
+          notifTitle = 'Application Update';
+          notifMessage = `Your adoption application for ${petName} was not approved.${rejection_reason ? ' Reason: ' + rejection_reason : ''}`;
+          notifType = 'adoption_update';
+        }
+
+        if (notifTitle) {
+          try {
+            await db.query(
+              `INSERT INTO notifications (user_id, type, title, message, data) VALUES ($1, $2, $3, $4, $5)`,
+              [userId, notifType, notifTitle, notifMessage, JSON.stringify({ adoption_id: appId, pet_id: petId })]
+            );
+          } catch (notifError) {
+            console.error('Failed to create notification:', notifError);
+          }
+        }
+      }
     }
 
     // Log activity
@@ -643,6 +799,86 @@ router.put('/adoptions/:id/status', async (req, res) => {
   } catch (error) {
     console.error('Update adoption status error:', error);
     res.status(500).json({ error: 'Failed to update application' });
+  }
+});
+
+// Manually mark payment as completed (Admin)
+router.put('/adoptions/:id/payment', async (req, res) => {
+  try {
+    const appId = req.params.id;
+    
+    // Get application info
+    const appCheck = await db.query(
+      `SELECT a.id, a.status, a.pet_id, a.user_id, a.payment_completed, a.paymongo_checkout_id, a.payment_method
+       FROM adoption_applications a
+       WHERE a.id = $1`,
+      [appId]
+    );
+
+    if (appCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    const application = appCheck.rows[0];
+
+    if (application.payment_completed) {
+      return res.status(400).json({ error: 'Payment is already marked as completed' });
+    }
+
+    if (application.status !== 'approved') {
+      return res.status(400).json({ error: 'Only approved applications can have payment completed' });
+    }
+
+    // Determine payment method: if a checkout session exists, it's online payment
+    const resolvedMethod = application.paymongo_checkout_id ? 'paymongo' : (application.payment_method || 'manual');
+
+    // Update application to mark payment completed.
+    // We expose payment_admin_verified as a derived field in SELECTs for schema compatibility.
+    await db.query(
+      `UPDATE adoption_applications SET 
+        payment_completed = true,
+        payment_date = COALESCE(payment_date, NOW()),
+        payment_method = $2,
+        updated_at = NOW()
+       WHERE id = $1`,
+      [appId, resolvedMethod]
+    );
+
+    // Update pet status to adopted
+    await db.query('UPDATE pets SET status = $1 WHERE id = $2', ['adopted', application.pet_id]);
+
+    // Send notification to user
+    if (application.user_id) {
+      const pet = await db.query('SELECT name FROM pets WHERE id = $1', [application.pet_id]);
+      const petName = pet.rows[0]?.name || 'your pet';
+      
+      try {
+        await db.query(
+          `INSERT INTO notifications (user_id, type, title, message, data) VALUES ($1, $2, $3, $4, $5)`,
+          [
+            application.user_id, 
+            'payment_confirmed', 
+            'Payment Confirmed! 🎉', 
+            `Your payment for the adoption of ${petName} has been confirmed by the admin!`, 
+            JSON.stringify({ adoption_id: appId, pet_id: application.pet_id })
+          ]
+        );
+      } catch (notifError) {
+        console.error('Failed to create notification:', notifError);
+      }
+    }
+
+    // Log activity
+    await db.query(
+      `INSERT INTO admin_activity_logs (admin_id, action, entity_type, entity_id, details)
+       VALUES ($1, 'confirm_payment', 'adoption', $2, $3)`,
+      [req.admin.id, appId, JSON.stringify({ previous_status: application.payment_completed })]
+    );
+
+    res.json({ success: true, message: 'Payment confirmed successfully' });
+  } catch (error) {
+    console.error('Confirm payment error:', error);
+    res.status(500).json({ error: 'Failed to confirm payment' });
   }
 });
 
@@ -690,6 +926,166 @@ router.delete('/adoptions/:id', async (req, res) => {
   } catch (error) {
     console.error('Delete adoption error:', error);
     res.status(500).json({ error: 'Failed to delete application' });
+  }
+});
+
+// ==================== DELIVERY MANAGEMENT ====================
+
+// Get all deliveries (paid adoptions with delivery info)
+router.get('/deliveries', async (req, res) => {
+  try {
+    const { status, limit = 100, offset = 0 } = req.query;
+
+    let query = `
+      SELECT a.id, a.status, a.payment_completed, a.payment_amount, a.payment_date,
+             a.payment_method, a.paymongo_checkout_id,
+             a.delivery_status, a.delivery_full_name, a.delivery_phone,
+             a.delivery_address, a.delivery_city, a.delivery_postal_code,
+             a.delivery_notes, a.delivery_scheduled_date, a.delivery_actual_date,
+             a.delivery_tracking_notes, a.delivery_updated_at,
+             p.name as pet_name, p.adoption_fee,
+             COALESCE(
+               (SELECT image_url FROM pet_images WHERE pet_id = p.id AND is_primary = TRUE LIMIT 1),
+               (SELECT image_url FROM pet_images WHERE pet_id = p.id ORDER BY display_order LIMIT 1),
+               CASE WHEN p.images IS NOT NULL AND array_length(p.images, 1) > 0 THEN p.images[1] ELSE NULL END
+             ) as pet_image,
+             u.full_name as applicant_name, u.email as applicant_email
+      FROM adoption_applications a
+      JOIN pets p ON a.pet_id = p.id
+      LEFT JOIN users u ON a.user_id = u.id
+      WHERE a.payment_completed = true AND p.shelter_id IS NULL
+    `;
+
+    const params = [];
+    let paramIndex = 1;
+
+    if (status && status !== 'all') {
+      query += ` AND a.delivery_status = $${paramIndex}`;
+      params.push(status);
+      paramIndex++;
+    }
+
+    query += ` ORDER BY a.payment_date DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(parseInt(limit), parseInt(offset));
+
+    const result = await db.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Admin get deliveries error:', error);
+    res.status(500).json({ error: 'Failed to get deliveries' });
+  }
+});
+
+// Get delivery stats
+router.get('/deliveries/stats', async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE a.payment_completed = true) as total_deliveries,
+        COUNT(*) FILTER (WHERE a.payment_completed = true AND a.delivery_status = 'processing') as processing,
+        COUNT(*) FILTER (WHERE a.payment_completed = true AND a.delivery_status = 'preparing') as preparing,
+        COUNT(*) FILTER (WHERE a.payment_completed = true AND a.delivery_status = 'out_for_delivery') as out_for_delivery,
+        COUNT(*) FILTER (WHERE a.payment_completed = true AND a.delivery_status = 'delivered') as delivered,
+        COUNT(*) FILTER (WHERE a.payment_completed = true AND a.delivery_status = 'cancelled') as cancelled,
+        COALESCE(SUM(COALESCE(a.payment_amount, p.adoption_fee, 0)) FILTER (WHERE a.payment_completed = true), 0) as total_revenue
+      FROM adoption_applications a
+      LEFT JOIN pets p ON a.pet_id = p.id
+      WHERE p.shelter_id IS NULL
+    `);
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Delivery stats error:', error);
+    res.status(500).json({ error: 'Failed to get delivery stats' });
+  }
+});
+
+// Update delivery status
+router.put('/deliveries/:id/status', async (req, res) => {
+  try {
+    const { delivery_status, delivery_scheduled_date, delivery_tracking_notes } = req.body;
+    const appId = req.params.id;
+
+    const validStatuses = ['processing', 'preparing', 'out_for_delivery', 'delivered', 'cancelled'];
+    if (delivery_status && !validStatuses.includes(delivery_status)) {
+      return res.status(400).json({ error: 'Invalid delivery status' });
+    }
+
+    let updateQuery = `UPDATE adoption_applications SET delivery_updated_at = NOW(), updated_at = NOW()`;
+    const params = [];
+    let paramIndex = 1;
+
+    if (delivery_status) {
+      updateQuery += `, delivery_status = $${paramIndex}`;
+      params.push(delivery_status);
+      paramIndex++;
+
+      if (delivery_status === 'delivered') {
+        updateQuery += `, delivery_actual_date = NOW()`;
+      }
+    }
+
+    if (delivery_scheduled_date !== undefined) {
+      updateQuery += `, delivery_scheduled_date = $${paramIndex}`;
+      params.push(delivery_scheduled_date || null);
+      paramIndex++;
+    }
+
+    if (delivery_tracking_notes !== undefined) {
+      updateQuery += `, delivery_tracking_notes = $${paramIndex}`;
+      params.push(delivery_tracking_notes || null);
+      paramIndex++;
+    }
+
+    updateQuery += ` WHERE id = $${paramIndex} AND payment_completed = true RETURNING id, delivery_status, user_id, pet_id`;
+    params.push(appId);
+
+    const result = await db.query(updateQuery, params);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Delivery not found or payment not completed' });
+    }
+
+    // Send notification to user about delivery update
+    const row = result.rows[0];
+    if (row.user_id && delivery_status) {
+      const pet = await db.query('SELECT name FROM pets WHERE id = $1', [row.pet_id]);
+      const petName = pet.rows[0]?.name || 'your pet';
+      const statusLabels = {
+        processing: 'is being processed',
+        preparing: 'is being prepared for delivery',
+        out_for_delivery: 'is on the way to you! 🚗',
+        delivered: 'has been delivered! Welcome your new family member! 🎉',
+        cancelled: 'delivery has been cancelled',
+      };
+
+      try {
+        await db.query(
+          `INSERT INTO notifications (user_id, type, title, message, data) VALUES ($1, $2, $3, $4, $5)`,
+          [
+            row.user_id,
+            'adoption_update',
+            delivery_status === 'delivered' ? 'Pet Delivered! 🎉' : 'Delivery Update',
+            `Your adoption of ${petName} ${statusLabels[delivery_status] || 'has been updated'}.`,
+            JSON.stringify({ adoption_id: appId, delivery_status }),
+          ]
+        );
+      } catch (notifError) {
+        console.error('Failed to create delivery notification:', notifError);
+      }
+    }
+
+    // Log activity
+    await db.query(
+      `INSERT INTO admin_activity_logs (admin_id, action, entity_type, entity_id, details)
+       VALUES ($1, 'update_delivery', 'adoption', $2, $3)`,
+      [req.admin.id, appId, JSON.stringify({ delivery_status, delivery_tracking_notes })]
+    );
+
+    res.json({ success: true, message: 'Delivery updated successfully' });
+  } catch (error) {
+    console.error('Update delivery error:', error);
+    res.status(500).json({ error: 'Failed to update delivery' });
   }
 });
 
@@ -2196,7 +2592,7 @@ router.post('/change-password', async (req, res) => {
     }
 
     // Hash new password
-    const newPasswordHash = await bcrypt.hash(newPassword, 10);
+    const newPasswordHash = await bcrypt.hash(newPassword, 12);
 
     // Update password
     await db.query(

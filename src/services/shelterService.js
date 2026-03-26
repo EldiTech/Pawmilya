@@ -4,6 +4,23 @@ import CONFIG from '../config/config';
 const { ENDPOINTS } = CONFIG;
 
 class ShelterService {
+  // Unwrap API client envelope and optional backend envelope.
+  unwrapResponse(response) {
+    let payload = response;
+
+    // api.request wraps responses as { success, data }
+    if (payload && typeof payload === 'object' && Object.prototype.hasOwnProperty.call(payload, 'data')) {
+      payload = payload.data;
+    }
+
+    // Some backend routes also wrap as { success, data }
+    if (payload && typeof payload === 'object' && Object.prototype.hasOwnProperty.call(payload, 'data')) {
+      payload = payload.data;
+    }
+
+    return payload;
+  }
+
   // Helper function to get the best available image URL
   getShelterImageUrl(shelter, type = 'cover') {
     if (!shelter) return null;
@@ -50,7 +67,7 @@ class ShelterService {
   // Get all shelters
   async getShelters(filters = {}) {
     try {
-      const params = {};
+      const params = { _t: Date.now() };
       
       if (filters.search) params.search = filters.search;
       if (filters.city) params.city = filters.city;
@@ -58,18 +75,14 @@ class ShelterService {
       if (filters.limit) params.limit = filters.limit;
 
       const response = await api.get(ENDPOINTS.SHELTERS, params);
+      const shelters = this.unwrapResponse(response);
       
       // Process shelters to include proper image URLs
-      if (Array.isArray(response)) {
-        return response.map(shelter => this.processShelterData(shelter));
-      } else if (response.data && Array.isArray(response.data)) {
-        return {
-          ...response,
-          data: response.data.map(shelter => this.processShelterData(shelter))
-        };
+      if (Array.isArray(shelters)) {
+        return shelters.map(shelter => this.processShelterData(shelter));
       }
       
-      return response;
+      return [];
     } catch (error) {
       throw error;
     }
@@ -79,8 +92,9 @@ class ShelterService {
   async getShelterById(shelterId) {
     try {
       const endpoint = ENDPOINTS.SHELTER_BY_ID.replace(':id', shelterId);
-      const response = await api.get(endpoint);
-      return this.processShelterData(response);
+      const response = await api.get(endpoint, { _t: Date.now() });
+      const shelter = this.unwrapResponse(response);
+      return this.processShelterData(shelter);
     } catch (error) {
       throw error;
     }
@@ -90,17 +104,19 @@ class ShelterService {
   async getNearbyShelters(latitude, longitude, radius = 20) {
     try {
       const response = await api.get(ENDPOINTS.NEARBY_SHELTERS, {
-        lat: latitude,
-        lng: longitude,
+        latitude,
+        longitude,
         radius,
+        _t: Date.now(),
       });
+      const shelters = this.unwrapResponse(response);
       
       // Process shelters to include proper image URLs
-      if (Array.isArray(response)) {
-        return response.map(shelter => this.processShelterData(shelter));
+      if (Array.isArray(shelters)) {
+        return shelters.map(shelter => this.processShelterData(shelter));
       }
       
-      return response;
+      return [];
     } catch (error) {
       throw error;
     }
@@ -110,7 +126,8 @@ class ShelterService {
   async getShelterPets(shelterId, filters = {}) {
     try {
       const endpoint = `${ENDPOINTS.SHELTERS}/${shelterId}/pets`;
-      return await api.get(endpoint, filters);
+      const response = await api.get(endpoint, { ...filters, _t: Date.now() });
+      return this.unwrapResponse(response);
     } catch (error) {
       throw error;
     }
@@ -124,9 +141,7 @@ class ShelterService {
   async getAvailableShelters() {
     try {
       const response = await api.get(ENDPOINTS.AVAILABLE_SHELTERS);
-      
-      // API returns { success: true, data: [...] }
-      const shelters = response.data || response;
+      const shelters = this.unwrapResponse(response);
       
       // Process shelters to include proper image URLs
       if (Array.isArray(shelters)) {
@@ -161,6 +176,16 @@ class ShelterService {
   async getMyTransferRequests() {
     try {
       return await api.get(ENDPOINTS.MY_TRANSFER_REQUESTS);
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Update rescuer-side delivery status for approved transfer
+  async updateTransferDeliveryStatus(requestId, status, notes = '') {
+    try {
+      const endpoint = ENDPOINTS.UPDATE_TRANSFER_DELIVERY_STATUS.replace(':id', requestId);
+      return await api.put(endpoint, { status, notes });
     } catch (error) {
       throw error;
     }
@@ -214,7 +239,9 @@ class ShelterService {
   // Get managed shelter details
   async getManagedShelter() {
     try {
-      return await api.get(ENDPOINTS.SHELTER_MANAGER_MY_SHELTER);
+      const response = await api.get(ENDPOINTS.SHELTER_MANAGER_MY_SHELTER, { _t: Date.now() });
+      const shelter = this.unwrapResponse(response);
+      return this.processShelterData(shelter);
     } catch (error) {
       throw error;
     }
@@ -223,7 +250,9 @@ class ShelterService {
   // Update managed shelter
   async updateManagedShelter(data) {
     try {
-      return await api.put(ENDPOINTS.SHELTER_MANAGER_MY_SHELTER, data);
+      const response = await api.put(ENDPOINTS.SHELTER_MANAGER_MY_SHELTER, data);
+      const shelter = this.unwrapResponse(response);
+      return this.processShelterData(shelter);
     } catch (error) {
       throw error;
     }
@@ -232,7 +261,20 @@ class ShelterService {
   // Get pets in managed shelter
   async getManagedShelterPets() {
     try {
-      return await api.get(ENDPOINTS.SHELTER_MANAGER_PETS);
+      const response = await api.get(ENDPOINTS.SHELTER_MANAGER_PETS, { _t: Date.now() });
+      const pets = this.unwrapResponse(response);
+      return Array.isArray(pets) ? pets : [];
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Update a pet in managed shelter
+  async updateManagedShelterPet(petId, data) {
+    try {
+      const endpoint = ENDPOINTS.SHELTER_MANAGER_PET_UPDATE.replace(':id', petId);
+      const response = await api.put(endpoint, data);
+      return this.unwrapResponse(response);
     } catch (error) {
       throw error;
     }
@@ -241,7 +283,9 @@ class ShelterService {
   // Get transfer requests for managed shelter
   async getManagedShelterTransfers() {
     try {
-      return await api.get(ENDPOINTS.SHELTER_MANAGER_TRANSFERS);
+      const response = await api.get(ENDPOINTS.SHELTER_MANAGER_TRANSFERS, { _t: Date.now() });
+      const transfers = this.unwrapResponse(response);
+      return Array.isArray(transfers) ? transfers : [];
     } catch (error) {
       throw error;
     }
@@ -252,6 +296,81 @@ class ShelterService {
     try {
       const endpoint = `${ENDPOINTS.SHELTER_MANAGER_TRANSFERS}/${requestId}`;
       return await api.patch(endpoint, { status, notes });
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // =====================================================
+  // SHELTER MANAGER ADOPTION METHODS
+  // =====================================================
+
+  // Get adoption applications for managed shelter's pets
+  async getShelterAdoptions(filters = {}) {
+    try {
+      const params = { _t: Date.now() };
+      if (filters.status) params.status = filters.status;
+      if (filters.limit) params.limit = filters.limit;
+      if (filters.offset) params.offset = filters.offset;
+
+      const response = await api.get(ENDPOINTS.SHELTER_MANAGER_ADOPTIONS, params);
+      const data = this.unwrapResponse(response);
+      return Array.isArray(data) ? data : [];
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Get manager-only payments overview and recent paid adoptions
+  async getManagedShelterPaymentsOverview() {
+    try {
+      const response = await api.get(ENDPOINTS.SHELTER_MANAGER_PAYMENTS_OVERVIEW, { _t: Date.now() });
+      const data = this.unwrapResponse(response);
+      return data && typeof data === 'object' ? data : { summary: null, recentPayments: [] };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Update adoption application status (approve/reject)
+  async updateAdoptionStatus(id, status, reviewNotes, rejectionReason) {
+    try {
+      const endpoint = ENDPOINTS.SHELTER_MANAGER_ADOPTION_STATUS.replace(':id', id);
+      return await api.put(endpoint, { status, review_notes: reviewNotes, rejection_reason: rejectionReason });
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Confirm payment for an approved adoption
+  async confirmAdoptionPayment(id) {
+    try {
+      const endpoint = ENDPOINTS.SHELTER_MANAGER_ADOPTION_PAYMENT.replace(':id', id);
+      return await api.put(endpoint);
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Verify PayMongo payment status for an approved adoption (manager-side)
+  async verifyAdoptionPayment(id) {
+    try {
+      const endpoint = ENDPOINTS.SHELTER_MANAGER_ADOPTION_VERIFY_PAYMENT.replace(':id', id);
+      return await api.put(endpoint);
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Update delivery status for a paid adoption
+  async updateDeliveryStatus(id, deliveryStatus, scheduledDate, trackingNotes) {
+    try {
+      const endpoint = ENDPOINTS.SHELTER_MANAGER_DELIVERY_STATUS.replace(':id', id);
+      return await api.put(endpoint, {
+        delivery_status: deliveryStatus,
+        delivery_scheduled_date: scheduledDate,
+        delivery_tracking_notes: trackingNotes,
+      });
     } catch (error) {
       throw error;
     }

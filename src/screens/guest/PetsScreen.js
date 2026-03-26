@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, memo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, memo, useRef } from 'react';
 import {
   View,
   Text,
@@ -17,30 +17,19 @@ import {
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, FONTS, SPACING, RADIUS } from '../../constants/theme';
 import { petService } from '../../services';
-import CONFIG from '../../config/config';
+import { normalizeImageUrl } from '../../utils/imageUrl';
 
 const FILTERS = ['All', 'Dogs', 'Cats', 'Birds', 'Rabbits', 'Others'];
+const SORT_MODES = ['name_asc', 'newest', 'oldest'];
+const SORT_LABELS = {
+  name_asc: 'Name A-Z',
+  newest: 'Newest First',
+  oldest: 'Oldest First',
+};
 
 // Helper to get image URL - supports base64 and legacy file paths
 const getImageUrl = (imagePath) => {
-  if (!imagePath) return 'https://via.placeholder.com/150?text=No+Image';
-  // If it's a base64 data URL, use it directly
-  if (imagePath.startsWith('data:image')) {
-    return imagePath;
-  }
-  // If it's already a full URL, extract the path and rebuild with current base URL
-  if (imagePath.startsWith('http')) {
-    try {
-      const url = new URL(imagePath);
-      const path = url.pathname;
-      const baseUrl = CONFIG.API_URL.replace('/api', '');
-      return `${baseUrl}${path}`;
-    } catch {
-      return imagePath;
-    }
-  }
-  const baseUrl = CONFIG.API_URL.replace('/api', '');
-  return `${baseUrl}${imagePath}`;
+  return normalizeImageUrl(imagePath, 'https://via.placeholder.com/150?text=No+Image');
 };
 
 const PetCard = ({ pet, onPress, onFavoritePress }) => (
@@ -70,22 +59,32 @@ const PetCard = ({ pet, onPress, onFavoritePress }) => (
   </TouchableOpacity>
 );
 
-const PetsScreen = () => {
+const PetsScreen = ({ onNavigateToLogin }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFilter, setSelectedFilter] = useState('All');
   const [petsData, setPetsData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [sortMode, setSortMode] = useState('name_asc');
   
   // Pet detail modal state
   const [selectedPet, setSelectedPet] = useState(null);
   const [petModalVisible, setPetModalVisible] = useState(false);
+  const abortControllerRef = useRef(null);
 
   useEffect(() => {
     fetchPets();
+    return () => {
+      abortControllerRef.current?.abort();
+    };
   }, [selectedFilter]);
 
   const fetchPets = async () => {
+    // Abort any in-flight request
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       setLoading(true);
       const filters = {};
@@ -101,6 +100,8 @@ const PetsScreen = () => {
 
       const response = await petService.getPets(filters);
       
+      if (controller.signal.aborted) return;
+
       if (response.success && Array.isArray(response.data)) {
         setPetsData(response.data);
       } else if (Array.isArray(response.data)) {
@@ -111,10 +112,13 @@ const PetsScreen = () => {
         setPetsData([]);
       }
     } catch (error) {
+      if (controller.signal.aborted) return;
       console.error('Error fetching pets:', error);
       Alert.alert('Error', 'Failed to load pets. Please try again.');
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   };
 
@@ -127,6 +131,28 @@ const PetsScreen = () => {
   const handleSearch = () => {
     fetchPets();
   };
+
+  const handleSortToggle = useCallback(() => {
+    setSortMode((prev) => {
+      const currentIndex = SORT_MODES.indexOf(prev);
+      const nextIndex = (currentIndex + 1) % SORT_MODES.length;
+      return SORT_MODES[nextIndex];
+    });
+  }, []);
+
+  const sortedPets = useMemo(() => {
+    const items = [...petsData];
+
+    if (sortMode === 'name_asc') {
+      items.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    } else if (sortMode === 'newest') {
+      items.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    } else if (sortMode === 'oldest') {
+      items.sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+    }
+
+    return items;
+  }, [petsData, sortMode]);
 
   const handleFilterPress = () => {
     Alert.alert(
@@ -147,9 +173,12 @@ const PetsScreen = () => {
     Alert.alert(
       'Account Required',
       'Please create an account to save pets to your favorites.',
-      [{ text: 'OK' }]
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sign Up', onPress: () => onNavigateToLogin?.() },
+      ]
     );
-  }, []);
+  }, [onNavigateToLogin]);
 
   // Close pet modal
   const handleClosePetModal = useCallback(() => {
@@ -162,9 +191,12 @@ const PetsScreen = () => {
     Alert.alert(
       'Account Required',
       'Please create an account to submit an adoption application.',
-      [{ text: 'OK' }]
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sign Up', onPress: () => onNavigateToLogin?.() },
+      ]
     );
-  }, []);
+  }, [onNavigateToLogin]);
 
   return (
     <View style={styles.container}>
@@ -227,9 +259,9 @@ const PetsScreen = () => {
 
         {/* Results Count */}
         <View style={styles.resultsHeader}>
-          <Text style={styles.resultsCount}>{petsData.length} pets available</Text>
-          <TouchableOpacity style={styles.sortButton}>
-            <Text style={styles.sortText}>Sort by</Text>
+          <Text style={styles.resultsCount}>{sortedPets.length} pets available</Text>
+          <TouchableOpacity style={styles.sortButton} onPress={handleSortToggle}>
+            <Text style={styles.sortText}>{SORT_LABELS[sortMode]}</Text>
             <Ionicons name="chevron-down" size={16} color={COLORS.textMedium} />
           </TouchableOpacity>
         </View>
@@ -241,8 +273,8 @@ const PetsScreen = () => {
               <ActivityIndicator size="large" color={COLORS.primary} />
               <Text style={styles.loadingText}>Loading pets...</Text>
             </View>
-          ) : petsData.length > 0 ? (
-            petsData.map((pet) => (
+          ) : sortedPets.length > 0 ? (
+            sortedPets.map((pet) => (
               <PetCard 
                 key={pet.id} 
                 pet={pet} 

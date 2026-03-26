@@ -26,6 +26,7 @@ CREATE TABLE users (
     suspended_at TIMESTAMP,
     suspended_by INTEGER,
     suspension_reason TEXT,
+    two_factor_enabled BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -171,6 +172,26 @@ CREATE TABLE adoption_applications (
     -- Timeline
     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     approved_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Payment Transactions Table - Customer payment to shelter ledger
+CREATE TABLE payment_transactions (
+    id SERIAL PRIMARY KEY,
+    adoption_application_id INTEGER NOT NULL UNIQUE REFERENCES adoption_applications(id) ON DELETE CASCADE,
+    pet_id INTEGER REFERENCES pets(id) ON DELETE SET NULL,
+    customer_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    shelter_id INTEGER REFERENCES shelters(id) ON DELETE SET NULL,
+    amount DECIMAL(10, 2) NOT NULL,
+    currency VARCHAR(10) NOT NULL DEFAULT 'PHP',
+    payment_provider VARCHAR(50) NOT NULL DEFAULT 'internal',
+    provider_reference VARCHAR(255),
+    payment_method VARCHAR(50),
+    status VARCHAR(30) NOT NULL DEFAULT 'paid',
+    notes TEXT,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    paid_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -329,6 +350,15 @@ CREATE INDEX idx_rescue_history_created ON rescue_history(created_at);
 
 CREATE INDEX idx_pets_status ON pets(status);
 CREATE INDEX idx_pets_featured ON pets(is_featured);
+CREATE INDEX idx_pets_status_featured_created ON pets(status, is_featured DESC, created_at DESC);
+CREATE INDEX idx_pets_breed_name ON pets(breed_name);
+CREATE INDEX idx_pets_category_id ON pets(category_id);
+CREATE INDEX idx_pets_shelter_id ON pets(shelter_id);
+CREATE INDEX idx_pets_location ON pets(location);
+
+CREATE INDEX idx_pet_images_pet ON pet_images(pet_id);
+CREATE INDEX idx_pet_images_primary ON pet_images(is_primary);
+CREATE INDEX idx_pet_images_pet_primary ON pet_images(pet_id, is_primary, display_order);
 
 CREATE INDEX idx_users_status ON users(status);
 CREATE INDEX idx_users_email ON users(email);
@@ -340,15 +370,18 @@ CREATE INDEX idx_adoption_applications_pet ON adoption_applications(pet_id);
 CREATE INDEX idx_rescue_reports_status ON rescue_reports(status);
 CREATE INDEX idx_rescue_reports_urgency ON rescue_reports(urgency);
 CREATE INDEX idx_rescue_reports_location ON rescue_reports(latitude, longitude);
+CREATE INDEX idx_rescue_reports_status_urgency_created ON rescue_reports(status, urgency, created_at DESC);
+CREATE INDEX idx_rescue_reports_rescuer ON rescue_reports(rescuer_id);
+CREATE INDEX idx_rescue_reports_created ON rescue_reports(created_at DESC);
+
+CREATE INDEX idx_shelters_city ON shelters(city);
+CREATE INDEX idx_shelters_location ON shelters(latitude, longitude);
 
 CREATE INDEX idx_rescuer_applications_user ON rescuer_applications(user_id);
 CREATE INDEX idx_rescuer_applications_status ON rescuer_applications(status);
 
 CREATE INDEX idx_notifications_user ON notifications(user_id);
 CREATE INDEX idx_notifications_read ON notifications(is_read);
-
-CREATE INDEX idx_pet_images_pet ON pet_images(pet_id);
-CREATE INDEX idx_pet_images_primary ON pet_images(is_primary);
 
 CREATE INDEX idx_user_saved_pets_user ON user_saved_pets(user_id);
 CREATE INDEX idx_user_saved_pets_pet ON user_saved_pets(pet_id);

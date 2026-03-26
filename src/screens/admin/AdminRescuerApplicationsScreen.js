@@ -1467,8 +1467,8 @@ const styles = StyleSheet.create({
     backgroundColor: ADMIN_COLORS.background, 
     borderTopLeftRadius: 32, 
     borderTopRightRadius: 32, 
-    maxHeight: '92%',
-    minHeight: '50%',
+    height: '94%',
+    overflow: 'hidden',
   },
   actionModalContent: { backgroundColor: ADMIN_COLORS.background, borderTopLeftRadius: 32, borderTopRightRadius: 32 },
   modalHeaderGradient: { borderTopLeftRadius: 32, borderTopRightRadius: 32, paddingTop: 24, paddingBottom: 20, paddingHorizontal: 24 },
@@ -1627,6 +1627,7 @@ const styles = StyleSheet.create({
   },
   detailModalBody: {
     flex: 1,
+    minHeight: 0,
   },
   detailModalScrollContent: {
     padding: 20,

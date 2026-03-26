@@ -610,11 +610,32 @@ const AdminSheltersScreen = ({ onGoBack, adminToken }) => {
       <html>
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" onerror="document.getElementById('map-error').style.display='flex';document.getElementById('map').style.display='none';" />
+        <script>
+          var _leafletLoadTimer = setTimeout(function() {
+            if (typeof L === 'undefined') {
+              document.getElementById('map-error').style.display = 'flex';
+              document.getElementById('map').style.display = 'none';
+            }
+          }, 5000);
+        </script>
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" onload="clearTimeout(_leafletLoadTimer);" onerror="clearTimeout(_leafletLoadTimer);document.getElementById('map-error').style.display='flex';document.getElementById('map').style.display='none';"></script>
         <style>
           * { margin: 0; padding: 0; box-sizing: border-box; }
           html, body, #map { height: 100%; width: 100%; }
+          #map-error {
+            display: none;
+            height: 100%;
+            width: 100%;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            background: #F8FAFC;
+            color: #64748B;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          }
+          #map-error span { font-size: 40px; margin-bottom: 12px; }
+          #map-error p { font-size: 16px; font-weight: 600; }
           .search-box {
             position: absolute;
             top: 16px;
@@ -664,6 +685,7 @@ const AdminSheltersScreen = ({ onGoBack, adminToken }) => {
         </style>
       </head>
       <body>
+        <div id="map-error"><span>🗺️</span><p>Map unavailable</p></div>
         <div id="map"></div>
         <div class="search-box">
           <span>📍</span>
@@ -672,6 +694,10 @@ const AdminSheltersScreen = ({ onGoBack, adminToken }) => {
         <div class="info-box" id="info">Tap on map to select location</div>
         <button class="confirm-btn" onclick="confirmLocation()">Confirm Location</button>
         <script>
+          if (typeof L === 'undefined') {
+            document.getElementById('map-error').style.display = 'flex';
+            document.getElementById('map').style.display = 'none';
+          } else {
           var map = L.map('map').setView([${lat}, ${lng}], 14);
           L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
           var marker = L.marker([${lat}, ${lng}], {draggable: true}).addTo(map);
@@ -733,6 +759,7 @@ const AdminSheltersScreen = ({ onGoBack, adminToken }) => {
           }
           
           updateAddress(${lat}, ${lng});
+          } // end else (Leaflet loaded)
         </script>
       </body>
       </html>

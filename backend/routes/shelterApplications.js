@@ -213,6 +213,11 @@ router.patch('/:id/status', authenticateAdmin, async (req, res) => {
     }
     const application = appResult.rows[0];
 
+    // `reviewed_by` references users(id). Admin IDs are from admins(id), so resolve
+    // a matching user account by email and store null if none exists.
+    const reviewerResult = await db.query('SELECT id FROM users WHERE email = $1 LIMIT 1', [req.admin.email]);
+    const reviewerUserId = reviewerResult.rows[0]?.id || null;
+
     // Prevent re-approving already approved applications
     if (status === 'approved' && application.status === 'approved') {
       return res.status(400).json({ error: 'Application is already approved' });
@@ -266,7 +271,7 @@ router.patch('/:id/status', authenticateAdmin, async (req, res) => {
            SET status = 'approved', created_shelter_id = $1, admin_feedback = $2,
                reviewed_by = $3, reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
            WHERE id = $4`,
-          [newShelter.id, admin_feedback || null, req.admin.id, id]
+          [newShelter.id, admin_feedback || null, reviewerUserId, id]
         );
 
         // Set managed_shelter_id on the user so shelterManager routes work
@@ -302,7 +307,7 @@ router.patch('/:id/status', authenticateAdmin, async (req, res) => {
          SET status = $1, admin_feedback = $2, reviewed_by = $3,
              reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
          WHERE id = $4`,
-        [status, admin_feedback || null, req.admin.id, id]
+        [status, admin_feedback || null, reviewerUserId, id]
       );
 
       // If revoking, also deactivate the shelter and clear the user link

@@ -19,7 +19,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import Logo from '../../components/Logo';
 import { COLORS, FONTS, SPACING, RADIUS } from '../../constants/theme';
 import { petService } from '../../services';
-import CONFIG from '../../config/config';
+import { normalizeImageUrl } from '../../utils/imageUrl';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const CAROUSEL_CARD_WIDTH = SCREEN_WIDTH - SPACING.xl * 2;
@@ -161,19 +161,7 @@ const HomeScreen = ({ onNavigateToRescue }) => {
   }, []);
 
   const getPetImageUri = (imagePath) => {
-    if (!imagePath) return 'https://via.placeholder.com/200x180?text=No+Image';
-    if (imagePath.startsWith('data:image')) return imagePath;
-    if (imagePath.startsWith('http')) {
-      try {
-        const url = new URL(imagePath);
-        const baseUrl = CONFIG.API_URL.replace('/api', '');
-        return `${baseUrl}${url.pathname}`;
-      } catch {
-        return imagePath;
-      }
-    }
-    const baseUrl = CONFIG.API_URL.replace('/api', '');
-    return `${baseUrl}${imagePath}`;
+    return normalizeImageUrl(imagePath, 'https://via.placeholder.com/200x180?text=No+Image');
   };
 
   const fetchFeaturedPets = async () => {
