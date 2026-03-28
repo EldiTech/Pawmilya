@@ -1,0 +1,9 @@
+Report Description,Test Phase Details,Test Results Summary,Detailed Test Cases
+"Execution report for the software testing phase.","Phase: System Testing
+Start Date: 2026-03-01
+End Date: 2026-03-28","Total Test Cases: 100
+Passed: 90
+Failed: 10","Case ID,Description,Expected Result,Actual Result,Status
+TC_001,Login Functionality,User should be able to log in successfully,User logged in successfully,Passed
+TC_002,Logout Functionality,User should be able to log out successfully,User logged out successfully,Passed
+TC_003,Search Functionality,User should find results using search bar,No results found,Failed"
