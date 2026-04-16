@@ -33,10 +33,17 @@ yarn-error.*
 # local env files
 .env
 .env.*
+.env*.local
+.envrc
+.direnv/
 !.env.example
 backend/.env
 backend/.env.*
 !backend/.env.example
+
+# Firebase / Google service configs (often contain API keys)
+google-services.json
+GoogleService-Info.plist
 
 # logs
 logs/
@@ -67,6 +74,8 @@ backend/tmp/
 **/build/
 android/.gradle/
 android/local.properties
+
+app-example
 
 # generated native folders
 /ios
